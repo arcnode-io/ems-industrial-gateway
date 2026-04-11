@@ -1,0 +1,4 @@
+local:
+  log_level: DEBUG
+beta:
+  log_level: INFO
