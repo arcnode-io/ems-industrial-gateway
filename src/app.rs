@@ -1,4 +1,4 @@
-//! Application library for rust-base template.
+//! Application library for ems-industrial-gateway.
 //!
 //! This library provides basic arithmetic functions and configuration management.
 
