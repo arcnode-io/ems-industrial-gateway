@@ -11,15 +11,27 @@ missing_docs_in_private_items = "warn"
 missing_docs = "warn"
 
 [dependencies]
-serde = {version = "1.0.219", features = ["derive"]}
-serde_yaml = "0.9.34"
+rodbus = "1.4"
+paho-mqtt = "0.13"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
-validator = {version = "0.20.0" , features = ["derive"]}
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9.34"
+validator = { version = "0.20.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+backoff = { version = "0.4", features = ["tokio"] }
+futures = "0.3"
+
+[dev-dependencies]
+testcontainers = "0.20"
 
 [lib]
 name = "ems_industrial_gateway"
-path = "src/app.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "ems-industrial-gateway"
@@ -37,4 +49,3 @@ integration = "cargo test --test integration_test"
 cover = "cargo tarpaulin --skip-clean --exclude-files=src/{main,config}.rs --target-dir=target/coverage"
 review = "claude 'run code-reviewer agent against diff for quality and elegance'"
 commit = "cargo cmd checks && cargo cmd cover && cargo cmd review && git add -A && git cz && git push"
-

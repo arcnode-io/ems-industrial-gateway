@@ -1,19 +1,16 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)]
+use ems_industrial_gateway::{app, config::load_config};
 
-mod config;
-use ems_industrial_gateway::app;
-
-/// Application entry point that loads configuration, sets up logging, and runs the app.
-///
-/// Loads configuration from cfg.yml, initializes the logger with the configured level,
-/// logs the configuration, and calls the main app function with hardcoded values.
-///
-/// # Panics
-/// Panics if configuration cannot be loaded from cfg.yml file
-fn main() {
-    let cfg = config::load_config().unwrap();
-    config::setup_logger(&cfg);
-    tracing::info!("Running with: {:?}", cfg);
-
-    app(1, 2);
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> anyhow::Result<()> {
+    let cfg = load_config()?;
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_max_level(match cfg.log_level.as_str() {
+            "error" => tracing::Level::ERROR,
+            "warn" => tracing::Level::WARN,
+            "debug" => tracing::Level::DEBUG,
+            _ => tracing::Level::INFO,
+        })
+        .init();
+    app::run(cfg).await
 }
