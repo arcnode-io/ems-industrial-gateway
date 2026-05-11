@@ -46,3 +46,42 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 - `cargo audit` will scream about transitive TLS/DNS deps that aren't actually used; build the ignore list once and move on.
 
 **Simulator pattern (now canonical, applied to Modbus):** `mock-modbus-server` uses `src/simulator.rs` with a data-driven sawtooth strategy. Each channel declares its `{addr_high, addr_low, min, max, step}`. A tokio task ticks every `TICK_MS` (default 1000ms), locks rodbus's wrapped handler, and mutates the holding-register `HashMap` in place. Cross-thread sharing is rodbus's own `wrap()` which produces `Arc<Mutex<MeterHandler>>` — handler stays `pub holding: HashMap<u16, u16>` so simulator + handler read/write the same map. Integration tests assert the published value falls in the sawtooth's known range, not exact equality. Reference pattern from `~/fullstack-energy/fixtures/mock-modbus-server/src/simulate.rs` (with `Int32SawtoothSim` instead of slice-based `RangeIncrease`).
+
+---
+
+## SNMP v2c (2026-05-11)
+
+**Libraries:** `csnmp 0.6.0` (client, gateway side) + `rasn 0.28` / `rasn-snmp 0.28` / `rasn-smi 0.28` (server side, hand-rolled UDP agent). No mature Rust crate provides both client and server — different libs per side.
+
+**Library API quirks:**
+- `csnmp::ObjectValue` variant for SNMP "Gauge32" is named `Unsigned32(u32)` (SMI's name for it). Don't look for `Gauge32`.
+- `rasn_smi::v2::ObjectSyntax` variants are `Simple(SimpleSyntax)` + `ApplicationWide(ApplicationSyntax)`. The crate provides `From` impls for primitive int types — use `ObjectSyntax::from(value_as_i32)` to wrap integer values directly. Don't reach for `SimpleSyntax::Integer(Integer::Primitive(_))` constructors — that path doesn't exist on this version.
+- `rasn::types::ObjectIdentifier::new(arcs)` accepts `impl Into<Cow<'static, [u32]>>`. An owned `Vec<u32>` works (passed by move, NOT by reference — `&vec` triggers a lifetime error). Pass `oid_vec` not `&oid_vec`.
+- `Pdu.error_status` and `error_index` are plain `u32` — don't `.into()` them from `0i32`; just use `0` (clippy errors on `0u32.into()` as a useless conversion).
+- `rasn-snmp` v2 `Pdus::Response` wraps a tuple struct `Response(Pdu)` — construct with `rasn_snmp::v2::Response(pdu_value)`.
+
+**SNMP wire format reminders (RFC 3416):**
+- SNMP v2c runs over UDP. Standard agent port: 161.
+- A v2c `Message` = community string + version + `Pdus` enum. Decode entire datagram with `rasn::ber::decode::<Message<Pdus>>(bytes)`.
+- GetRequest: per-VarBind exact-OID lookup. GetNextRequest: lexicographic next OID in the agent's view.
+
+**Schema gotchas:**
+- DTM `SnmpBinding` (`template.protocols.schema.ts`) is minimal: `{ protocol: "snmp", oid: string }`. The agent host/port come from `device.connection`, merged into `x-protocol-source` per the device-api fix from Modbus round.
+- Connection block's `unit_id: null` is valid for SNMP (no slave concept). The Modbus-side `unit_id.parse::<u8>()` happens at the Modbus call site only — never touch it in SNMP-only paths.
+- Default SNMP community: `"public"` for v2c reads. Hardcoded in gateway client; revisit when per-device community strings are needed.
+
+**Test gotchas:**
+- `testcontainers::core::ContainerPort::Udp(161)` to expose UDP. Default `with_exposed_port(161)` is TCP and fails later with "container does not expose port 161/tcp".
+- Looking up the mapped UDP port: `container.get_host_port_ipv4(ContainerPort::Udp(161))`. Plain `get_host_port_ipv4(161)` assumes TCP.
+- `SocketAddr::parse()` requires an IP literal, NOT a hostname. testcontainers reports a `Host` (often a hostname like `localhost`). Use `tokio::net::lookup_host((host, port))` to resolve. csnmp's `Snmp2cClient::new` wants a real `SocketAddr`.
+- Stale containers between CI runs: shared-network containers (postgres, emqx, device-api) use FIXED names so device-api's beta cfg can resolve them by hostname. A killed prior run leaves them named on the daemon; the next run hits `Conflict: container name "/emqx" already in use`. Fix: `before_script` in `.gitlab-ci.yml` runs `docker rm -f postgres emqx device-api 2>/dev/null` + `docker network rm gateway-e2e`.
+
+**Dockerfile gotcha:** Same workspace-root stub trick from Modbus (`src/lib.rs` + stub other members). Updated mock-snmp-agent Dockerfile lists modbus + other peer dirs so `cargo build -p mock-snmp-agent` resolves the workspace cleanly.
+
+**ProtocolBinding enum refactor:** With Modbus + SNMP, gateway's `src/asyncapi/types.rs` is now a `#[serde(tag = "protocol")]` enum: `ProtocolBinding::ModbusTcp(ModbusTcpBinding)` / `Snmp(SnmpBinding)`. Each variant carries its own validated struct. `app.rs` matches on the variant to dispatch to the right client. Future protocols add a variant + extend the match.
+
+**What I wish I'd known before starting SNMP:**
+- Use `tokio::net::lookup_host` for hostname → SocketAddr — `SocketAddr::parse` won't.
+- ContainerPort::Udp for both `with_exposed_port` AND `get_host_port_ipv4`.
+- CI runners can leave stale named containers; `before_script` cleanup is mandatory for network-pinned fixtures.
+- The PDU template `~/arcnode/edp-api/device_templates/leaf/pdu.yaml` is the canonical SNMP test template (Server Tech 1718 enterprise). Mirror its OIDs in the fixture rather than inventing.
