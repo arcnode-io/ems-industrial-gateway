@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient};
 use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::lookup_host;
 use tokio::time::sleep;
 use tracing::warn;
 
@@ -17,9 +18,11 @@ const MAX_READ_ATTEMPTS: u32 = 5;
 /// Resolve `host:port` and SNMP GET on `oid`. Returns the integer value or
 /// errors if the OID isn't an integer-typed object.
 pub async fn read_integer(host: &str, port: u16, oid: &str) -> Result<i64> {
-    let socket: SocketAddr = format!("{host}:{port}")
-        .parse()
-        .context("parse snmp socket addr")?;
+    let socket: SocketAddr = lookup_host((host, port))
+        .await
+        .context("resolve snmp host:port")?
+        .next()
+        .context("no addrs from snmp host:port resolution")?;
     let parsed_oid: ObjectIdentifier = oid.parse().context("parse OID dotted-numeric")?;
 
     let mut last_err: Option<anyhow::Error> = None;
