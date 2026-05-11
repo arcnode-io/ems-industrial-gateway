@@ -1,0 +1,46 @@
+{
+  "deployment_uuid": "11111111-1111-4111-8111-111111111111",
+  "ems_mode": "sim",
+  "sizing_params": {
+    "P_compute_total_kW": 100,
+    "E_BESS_total_kWh": 200,
+    "T_coolant_setpoint_C": 18
+  },
+  "devices": {
+    "meter_01": {
+      "device_id": "meter_01",
+      "template": "revenue_meter",
+      "parent": null,
+      "connection": {
+        "host": "<replaced-at-test-time>",
+        "port": 502,
+        "unit_id": "1"
+      },
+      "blocking": []
+    }
+  },
+  "buses": [],
+  "templates_used": {
+    "revenue_meter": {
+      "template": "revenue_meter",
+      "kind": "leaf",
+      "description": "revenue meter",
+      "measurements": {
+        "kwh_delivered": {
+          "unit": "watt_hours",
+          "type": "float",
+          "poll_rate_hz": 0.1,
+          "binding": {
+            "protocol": "modbus_tcp",
+            "function_code": 3,
+            "address": 4000,
+            "data_type": "int32",
+            "word_order": "high_low",
+            "scale": 1.0,
+            "offset": 0.0
+          }
+        }
+      }
+    }
+  }
+}
