@@ -80,11 +80,17 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
     };
     app::run(cfg).await?;
 
-    // Assert — the MQTT message arrives with kwh_delivered = 1_000_000
+    // Assert — fixture's sawtooth simulator keeps kwh_delivered in
+    // [1_000_000, 1_010_000] step 100; assert the published value falls in
+    // that range (not exact equality — value depends on tick timing).
     let received = timeout(Duration::from_secs(5), stream.next()).await?;
     let msg = received.flatten().expect("expected MQTT message");
     let payload: Value = serde_json::from_slice(msg.payload())?;
-    assert_eq!(payload["value"].as_f64().unwrap(), 1_000_000.0);
+    let value = payload["value"].as_f64().unwrap();
+    assert!(
+        (1_000_000.0..=1_010_000.0).contains(&value),
+        "value {value} outside expected sawtooth range [1_000_000, 1_010_000]",
+    );
 
     Ok(())
 }
