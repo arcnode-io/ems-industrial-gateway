@@ -19,20 +19,14 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
     let (pg, emqx, modbus_fix) =
         tokio::try_join!(start_postgres(), start_emqx(), start_mock_modbus_server(),)?;
-    let pg_host = pg.get_host().await?;
-    let pg_port = pg.get_host_port_ipv4(5432).await?;
-    let emqx_host = emqx.get_host().await?;
+    // pg + emqx are on the shared Docker network — device-api reaches them by hostname.
+    // We hold the handles so they stay running, but don't need to read their host/port.
+    let _ = (&pg, &emqx);
     let emqx_port = emqx.get_host_port_ipv4(1883).await?;
     let modbus_host = modbus_fix.get_host().await?;
     let modbus_port = modbus_fix.get_host_port_ipv4(502).await?;
 
-    let device_api = start_device_api(
-        &pg_host.to_string(),
-        pg_port,
-        &emqx_host.to_string(),
-        emqx_port,
-    )
-    .await?;
+    let device_api = start_device_api().await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
 
     // Wire the fixture's host:port into the seed DTM.
