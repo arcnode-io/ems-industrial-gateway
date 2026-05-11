@@ -24,7 +24,10 @@
     "revenue_meter": {
       "template": "revenue_meter",
       "kind": "leaf",
-      "description": "revenue meter",
+      "equipment_id": "GRD-MTR-001",
+      "vendor": "Schneider Electric",
+      "model": "PowerLogic ION9000",
+      "description": "Class 0.1S revenue meter (ANSI C12.20 / IEC 62053-22)",
       "measurements": {
         "kwh_delivered": {
           "unit": "watt_hours",

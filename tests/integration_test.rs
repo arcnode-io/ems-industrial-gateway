@@ -49,7 +49,11 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
         .json(&dtm_body)
         .send()
         .await?;
-    assert_eq!(post_resp.status(), 201);
+    let status = post_resp.status();
+    if status != 201 {
+        let body = post_resp.text().await?;
+        panic!("POST /topology failed: status={status} body={body}");
+    }
 
     // Subscribe with a test-side MQTT client to verify the gateway's publish.
     let broker_url = format!("tcp://localhost:{emqx_port}");
