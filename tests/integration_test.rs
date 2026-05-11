@@ -13,6 +13,7 @@ use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
+use testcontainers::core::ContainerPort;
 use tokio::time::timeout;
 
 #[tokio::test]
@@ -29,7 +30,7 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     let modbus_host = modbus_fix.get_host().await?;
     let modbus_port = modbus_fix.get_host_port_ipv4(502).await?;
     let snmp_host = snmp_fix.get_host().await?;
-    let snmp_port = snmp_fix.get_host_port_ipv4(161).await?;
+    let snmp_port = snmp_fix.get_host_port_ipv4(ContainerPort::Udp(161)).await?;
 
     let device_api = start_device_api().await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
