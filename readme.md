@@ -4,45 +4,17 @@
 ![](https://gitlab.com/arcnode-io/ems-industrial-gateway/badges/main/coverage.svg)
 ![](https://img.shields.io/badge/1.93-gray?logo=rust)
 
-> Simple protocol adapters that publish directly to MQTT with units in topics
+> Rust gateway translating south-side grid protocols to north-side MQTT, driven by the AsyncAPI spec served by ems-device-api.
+
+## Scope (Tier 1)
+
+One device (`meter_01` / `revenue_meter`), one measurement (`kwh_delivered`), one Modbus TCP read → one MQTT publish → exit. End-to-end test validates the AsyncAPI/Modbus/MQTT contract against a real ems-device-api. See [`ems/docs/superpowers/specs/2026-05-10-gateway-stub-contract-validation-design.md`](../ems/docs/superpowers/specs/2026-05-10-gateway-stub-contract-validation-design.md).
 
 ## Pre-requisites
-- rust 1.93+
 
-## Diagrams
-
-### Deployment
-```plantuml
-rectangle fixtures #line.dashed {
-  rectangle mock_modbus_server
-  rectangle mock_snmp_agent
-  rectangle mock_redfish_service
-}
-
-rectangle industrial_gateway {
-  rectangle modbus_adapter
-  rectangle snmp_adapter
-  rectangle redfish_adapter
-}
-
-queue mqtt_broker
-
-modbus_adapter -- mock_modbus_server: modbus\n tcp
-snmp_adapter -- mock_snmp_agent: snmp
-redfish_adapter -- mock_redfish_service: redfish\n http
-
-modbus_adapter -u- mqtt_broker
-snmp_adapter -u- mqtt_broker
-redfish_adapter -u- mqtt_broker
-
-note right of fixtures
-    All adapters 
-    publish
-    over mqtt.
-end note
-
-```
-
+- Rust 1.93+
+- Docker (for the e2e test)
+- Harbor login for `173.211.12.43:8083` (image pulls)
 
 ## Topic Structure
 
@@ -53,20 +25,12 @@ sites/{site_id}/devices/{device_id}/measurements/{measurement}/{unit}    # 6 seg
 sites/{site_id}/devices/{device_id}/commands/{verb}/{target}/{unit}      # 7 segments
 ```
 
-Examples — payload is `FloatSample {ts, value}` unless noted:
-- `sites/site_001/devices/meter_01/measurements/voltage/volts`           → `{ts, value: 120.5}`
-- `sites/site_001/devices/meter_01/measurements/current/amps`            → `{ts, value: 25.3}`
-- `sites/site_001/devices/bess_01/measurements/state_of_charge/percent`  → `{ts, value: 85.2}`
-- `sites/site_001/devices/bess_01/commands/set/active_power/watts`       → `{ts, value: 5000}`
+Payload is `FloatSample {ts, value}` for float measurements. The gateway is the translation boundary — raw protocol values never reach MQTT:
 
-The gateway is the translation boundary — raw protocol values never reach MQTT:
-
-- **Scaling** — Modbus uint16, DNP3 int32, SNMP Gauge32, etc. are converted to engineering units using `scale`/`offset` from the `x-source` binding in the AsyncAPI spec
-- **Enum translation** — for `type: enum` channels, the gateway maps the raw integer to the string label using `register_value` entries from the spec (e.g. `1 → "MANUAL"`). MQTT carries the string; no consumer does int-to-label lookup.
+- **Scaling** — Modbus uint16, DNP3 int32, SNMP Gauge32, etc. are converted to engineering units using `scale`/`offset` from the `x-protocol-source` binding in the AsyncAPI spec
+- **Enum translation** — for `type: enum` channels, the gateway maps the raw integer to the string label using `register_value` entries from the spec
 
 ## Device API Integration
-
-Gateway fetches its AsyncAPI spec from device API at startup:
 
 ```plantuml
 participant industrial_gateway
@@ -74,40 +38,66 @@ participant device_api
 queue mqtt_broker
 
 industrial_gateway -> device_api: GET /asyncapi
-device_api -> industrial_gateway: AsyncAPI v3 spec\n(topics + x-* protocol bindings)
-industrial_gateway --> mqtt_broker
+device_api -> industrial_gateway: AsyncAPI v3 spec\n(channels + x-protocol-source bindings)
+industrial_gateway -> modbus_fixture: read holding registers
+industrial_gateway -> mqtt_broker: publish FloatSample
 ```
 
-## Adding/Removing Protocols
-
-### Add Protocol
-1. Create folder: `src/adapters/new_protocol/`
-2. Update `src/adapters/mod.rs` to include new module
-
-### Remove Protocol  
-1. Delete folder: `src/adapters/old_protocol/`
-2. Remove from `src/adapters/mod.rs`
+The gateway fetches `/asyncapi` with exponential backoff (boot-time race when device-api is still warming up) and parses it into validated structs (`AsyncApiSpec`, `ProtocolBinding`) — serde for deserialization, `validator` for business-rule checks at parse time.
 
 ## Project Structure
+
 ```
-├── Cargo.toml
-├── src/
-│   ├── main.rs              # Application entry point
-│   ├── device_api_client.rs     # HTTP client for domain API
-│   ├── mqtt.rs              # Shared MQTT publisher
-│   └── adapters/
-│       ├── mod.rs           # Lists active adapters
-│       ├── modbus/          # Modbus TCP
-│       ├── canbus/          # CANbus TCP
-│       ├── snmp/            # SNMP UDP
-│       ├── redfish/         # Redfish HTTPS/JSON
-│       └── dnp3/            # DNP3 TCP
-└── tests/
-    └── integration.rs
+src/
+├── main.rs              # tokio entry, init tracing, calls app::run
+├── lib.rs               # crate library surface (used by integration tests)
+├── app.rs               # orchestration: fetch /asyncapi → modbus read → MQTT publish
+├── config.rs            # cfg.yml deserialize
+├── asyncapi/
+│   ├── mod.rs
+│   └── types.rs         # validated AsyncApiSpec + ProtocolBinding
+├── http/
+│   ├── mod.rs
+│   └── client.rs        # fetch_asyncapi with exponential backoff
+├── modbus/
+│   ├── mod.rs
+│   ├── client.rs        # rodbus client, decode_int32, scale/offset
+│   └── client_test.rs   # decode unit tests
+└── mqtt/
+    ├── mod.rs
+    ├── publisher.rs     # FloatSample publish
+    └── subscriber.rs    # system/topology_changed sub (logs only)
+
+tests/
+├── integration_test.rs  # e2e: 4 testcontainers + real gateway binary
+└── fixtures/
+    ├── mod.rs
+    ├── containers.rs    # postgres, emqx, device-api, mock-modbus-server
+    └── seed_dtm.json    # DTM with revenue_meter wired to fixture
 ```
 
-### Component Responsibilities
-- **main.rs**: Application entry point, coordinates adapters
-- **device_api_client.rs**: HTTP client to fetch AsyncAPI spec from device API
-- **mqtt.rs**: Shared MQTT publisher used by all adapters
-- **adapters/**: Protocol-specific implementations that use shared MQTT publisher
+## Run locally
+
+```bash
+# Boot device-api + emqx + mock-modbus-server separately, then:
+cargo run
+```
+
+Cfg picks `local:` block from `cfg.yml` by default; `ENV=beta cargo run` switches to `beta:`.
+
+## Run the e2e test
+
+```bash
+cargo test --test integration_test
+```
+
+Pulls `173.211.12.43:8083/library/{ems-device-api,mock-modbus-server}:latest` from Harbor and brings up the full stack. First run takes ~60s for container boot; subsequent runs are faster.
+
+## What the e2e proves
+
+- `device-api` POST /topology accepts a `revenue_meter` DTM and persists it.
+- `device-api` regenerates `/asyncapi` with `x-protocol-source` populated.
+- Gateway fetches and validates the spec end-to-end.
+- Gateway connects to the Modbus fixture, reads `int32` at register 4000 with `high_low` word order, applies `scale`/`offset`.
+- Gateway publishes a `FloatSample` to the canonical topic with the decoded value.
+- Test-side MQTT subscriber receives `value: 1_000_000.0` (the fixture's canned register content).
