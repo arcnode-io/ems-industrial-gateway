@@ -27,7 +27,8 @@
 - [ ] **PF.1: Confirm device-api Docker image is published**
 
 ```bash
-docker pull registry.gitlab.com/arcnode-io/ems-device-api:latest 2>&1 | tail
+docker login 173.211.12.43:8083  # if not already authed
+docker pull 173.211.12.43:8083/library/ems-device-api:latest 2>&1 | tail
 ```
 
 Expected: image pulls. If not, stop and surface — the e2e test requires it.
@@ -41,17 +42,7 @@ cargo doc --no-deps -p rodbus --open 2>&1 | tail -3
 
 Confirm `rodbus::server::spawn_tcp_server_task` + `rodbus::server::RequestHandler` + `rodbus::client::Channel::create_tcp` exist (matches reference patterns).
 
-- [ ] **PF.3: Probe `@asyncapi/modelina` Rust generator**
-
-```bash
-mkdir -p /tmp/modelina-probe && cd /tmp/modelina-probe
-# Take a real /asyncapi sample from a device-api dev instance OR construct minimal AsyncAPI 3.0 doc
-echo '{"asyncapi":"3.0.0","info":{"title":"test","version":"1.0.0"},"channels":{},"operations":{}}' > sample.json
-npx -y @asyncapi/modelina generate rust sample.json --output ./out 2>&1 | tail -10
-ls out/
-```
-
-Expected: emits `.rs` files. If errors, stop and surface — gateway build pipeline depends on this.
+- [ ] **PF.3:** (no longer applicable — modelina dropped; gateway uses hand-rolled typed structs via `serde` + `validator` derives, defined in `src/asyncapi/types.rs`)
 
 ---
 
@@ -73,21 +64,20 @@ Expected: emits `.rs` files. If errors, stop and surface — gateway build pipel
 
 | File | Action | Responsibility |
 |---|---|---|
-| `Cargo.toml` | Rewrite deps | `rodbus 1.4`, `paho-mqtt 0.13`, `reqwest 0.12`, `tokio`, `tracing`, `serde`, `serde_json`, `anyhow`, `backoff` |
-| `build.rs` | Create | Invokes `npx @asyncapi/modelina generate rust contracts/asyncapi-snapshot.json --output src/generated/` |
-| `contracts/asyncapi-snapshot.json` | Create | Checked-in `/asyncapi` sample; modelina input. Refresh manually when device-api spec changes intentionally. |
+| `Cargo.toml` | Rewrite deps | `rodbus 1.4`, `paho-mqtt 0.13`, `reqwest 0.12`, `tokio`, `tracing`, `serde`, `serde_json`, `serde_yaml`, `validator 0.19`, `chrono`, `anyhow`, `backoff` |
 | `cfg.yml` | Modify | `device_api_url`, `broker_url`, `site_id`, `log_level` |
+| `src/asyncapi/mod.rs` | Create | Module marker |
+| `src/asyncapi/types.rs` | Create | Hand-rolled typed structs (`AsyncApiSpec`, `ProtocolBinding`) with `Deserialize` + `Validate` derives |
 | `src/config.rs` | Rewrite | Cfg YAML deserialize |
 | `src/main.rs` | Rewrite | tokio entry, init tracing, calls `app::run(cfg)` |
 | `src/app.rs` | Rewrite | Boot orchestration: load cfg → init clients → sub beacon → fetch /asyncapi → modbus read → MQTT publish → exit |
 | `src/http/mod.rs` | Create | Module marker |
-| `src/http/client.rs` | Create | `fetch_asyncapi(url) -> AsyncApiDoc` with exponential backoff |
+| `src/http/client.rs` | Create | `fetch_asyncapi(url) -> AsyncApiSpec` with exponential backoff; serde deserializes into typed struct; `validate()` enforces business rules |
 | `src/modbus/mod.rs` | Create | Module marker |
 | `src/modbus/client.rs` | Create | `read_holding(host, port, unit_id, addr, count) -> Vec<u16>`, `decode_int32(words, word_order) -> i32`, `apply_scale_offset(raw, scale, offset) -> f64` |
 | `src/mqtt/mod.rs` | Create | Module marker |
 | `src/mqtt/publisher.rs` | Create | Publish `FloatSample {ts, value}` to topic |
 | `src/mqtt/subscriber.rs` | Create | Sub `system/topology_changed` (logs only in v1) |
-| `src/generated/` | Gitignored | Modelina output |
 | `tests/fixtures/containers.rs` | Create | 4 testcontainer helpers: `start_postgres`, `start_device_api`, `start_emqx`, `start_mock_modbus_server` |
 | `tests/fixtures/seed_dtm.json` | Create | DTM payload to POST to device-api |
 | `tests/e2e.rs` | Create | The single integration test |
@@ -306,22 +296,23 @@ ENTRYPOINT ["/usr/local/bin/mock-modbus-server"]
 
 Read the existing CI file. Append (or alongside any existing jobs) a Docker build+publish stage:
 
+Insert into `stages:` and add a publish job that pushes to the private Harbor at `173.211.12.43:8083` (same convention as `ems-device-api/.gitlab-ci.yml`):
+
 ```yaml
+stages:
+  - check
+  - publish
+  - mirror
+
 publish-mock-modbus-server:
   stage: publish
-  image: docker:24
-  services:
-    - docker:24-dind
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-  before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
-    - docker build -f mock-modbus-server/Dockerfile -t $CI_REGISTRY_IMAGE/mock-modbus-server:latest .
-    - docker push $CI_REGISTRY_IMAGE/mock-modbus-server:latest
+    - docker login -u admin -p $HARBOR_PASSWORD 173.211.12.43:8083
+    - docker build -f mock-modbus-server/Dockerfile -t 173.211.12.43:8083/library/mock-modbus-server .
+    - docker push 173.211.12.43:8083/library/mock-modbus-server
+  only:
+    - main
 ```
-
-(If `.gitlab-ci.yml` doesn't yet define a `publish` stage, add it to `stages:` at the top.)
 
 - [ ] **Step 3.3: Local docker build smoke**
 
@@ -349,17 +340,18 @@ git commit -m "🔧 build: Dockerfile + CI publish for mock-modbus-server"
 git push origin main
 ```
 
-Wait for pipeline to finish + verify image at `registry.gitlab.com/arcnode-io/ems-industrial-fixtures/mock-modbus-server:latest`.
+Wait for pipeline to finish + verify image at `173.211.12.43:8083/library/mock-modbus-server:latest`.
 
 ---
 
-## Task 4: gateway — Cargo.toml deps + modelina build pipeline
+## Task 4: gateway — Cargo.toml deps + validated structs for /asyncapi
 
 **Files (now in `ems-industrial-gateway/`):**
 - Modify: `Cargo.toml`
-- Create: `build.rs`
-- Create: `contracts/asyncapi-snapshot.json`
-- Modify: `.gitignore` (add `src/generated/`)
+- Create: `src/asyncapi/mod.rs`
+- Create: `src/asyncapi/types.rs`
+
+The gateway consumes `/asyncapi` via hand-rolled validated structs (serde `Deserialize` + validator `Validate` derives). No build-time codegen. Field names compile-checked. Business rules (port range, non-empty host, etc.) enforced on every parse via `spec.validate()`.
 
 - [ ] **Step 4.1: Replace `Cargo.toml`**
 
@@ -383,112 +375,79 @@ tracing-subscriber = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+validator = { version = "0.19", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 backoff = { version = "0.4", features = ["tokio"] }
-
-[build-dependencies]
-# build.rs invokes `npx @asyncapi/modelina` via std::process::Command;
-# no Rust deps needed.
+futures = "0.3"
 
 [dev-dependencies]
 testcontainers = "0.20"
 ```
 
-- [ ] **Step 4.2: Capture an AsyncAPI snapshot to `contracts/asyncapi-snapshot.json`**
-
-Generate the snapshot from a running device-api dev instance against the seed DTM that the e2e test will use:
-
-```bash
-cd /home/resister/arcnode/ems-device-api
-# Boot device-api against LocalStack with a seeded revenue_meter DTM,
-# then curl /asyncapi and capture:
-# (See ems-device-api dev quickstart in its readme — this is a one-time bootstrap action.)
-# Alternative: hand-construct minimal valid AsyncAPI 3.0 that modelina can codegen.
-
-mkdir -p ../ems-industrial-gateway/contracts
-curl -s http://localhost:3000/asyncapi > ../ems-industrial-gateway/contracts/asyncapi-snapshot.json
-```
-
-If device-api can't be booted locally, hand-construct:
-
-```json
-{
-  "asyncapi": "3.0.0",
-  "info": {
-    "title": "ARCNODE EMS",
-    "version": "1.0.0"
-  },
-  "channels": {
-    "kwh_delivered": {
-      "address": "sites/{site_id}/devices/{device_id}/measurements/kwh_delivered/watt_hours",
-      "messages": {
-        "sample": { "$ref": "#/components/messages/FloatSample" }
-      }
-    }
-  },
-  "components": {
-    "messages": {
-      "FloatSample": {
-        "payload": {
-          "type": "object",
-          "properties": {
-            "ts": { "type": "string", "format": "date-time" },
-            "value": { "type": "number" }
-          },
-          "required": ["ts", "value"]
-        }
-      }
-    }
-  }
-}
-```
-
-- [ ] **Step 4.3: Create `build.rs`**
+- [ ] **Step 4.2: Create `src/asyncapi/mod.rs`**
 
 ```rust
-//! Build-time: codegen Rust types from contracts/asyncapi-snapshot.json via modelina.
-//! Emits to src/generated/. Gitignored.
+pub mod types;
+```
 
-use std::process::Command;
+- [ ] **Step 4.3: Create `src/asyncapi/types.rs` — validated structs for /asyncapi**
 
-fn main() {
-    let snapshot = "contracts/asyncapi-snapshot.json";
-    let out_dir = "src/generated";
+```rust
+//! Hand-rolled validated structs that mirror device-api's /asyncapi shape.
+//!
+//! The gateway only consumes a narrow slice today (x-protocol-source bindings).
+//! When the spec shape changes, update these structs — the compiler tells you
+//! where to look. `Validate` enforces business rules at parse time.
 
-    println!("cargo:rerun-if-changed={}", snapshot);
+use serde::Deserialize;
+use std::collections::HashMap;
+use validator::Validate;
 
-    let status = Command::new("npx")
-        .args(["-y", "@asyncapi/modelina", "generate", "rust", snapshot, "--output", out_dir])
-        .status()
-        .expect("failed to run modelina (npx required)");
+/// Top-level AsyncAPI v3 spec, narrowed to fields the gateway reads.
+/// Extra keys in the JSON are ignored by serde's default behavior.
+#[derive(Debug, Deserialize, Validate)]
+pub struct AsyncApiSpec {
+    pub info: SpecInfo,
+    #[serde(rename = "x-protocol-source")]
+    #[validate(nested)]
+    pub x_protocol_source: HashMap<String, HashMap<String, ProtocolBinding>>,
+}
 
-    if !status.success() {
-        panic!("modelina codegen failed");
-    }
+/// AsyncAPI info block.
+#[derive(Debug, Deserialize, Validate)]
+pub struct SpecInfo {
+    #[validate(length(min = 1))]
+    pub version: String,
+}
+
+/// Per-device, per-measurement protocol binding (Tier 1: Modbus only).
+#[derive(Debug, Deserialize, Validate)]
+pub struct ProtocolBinding {
+    #[validate(length(min = 1))]
+    pub host: String,
+    #[validate(range(min = 1, max = 65535))]
+    pub port: u16,
+    pub unit_id: u8,
+    pub address: u16,
+    pub scale: f64,
+    pub offset: f64,
 }
 ```
 
-- [ ] **Step 4.4: Add gitignore entry**
-
-```bash
-cd /home/resister/arcnode/ems-industrial-gateway
-echo "/src/generated/" >> .gitignore
-```
-
-- [ ] **Step 4.5: Smoke build (codegen runs)**
+- [ ] **Step 4.4: Build to verify**
 
 ```bash
 cargo build 2>&1 | tail -10
-ls src/generated/
 ```
 
-Expected: modelina runs successfully, emits `.rs` files in `src/generated/`. Build will then fail because gateway sources don't compile yet — that's fine, codegen step succeeded.
+Expected: compiles cleanly. (Gateway sources elsewhere haven't been written yet — that's fine, this task only adds deps + types.)
 
-- [ ] **Step 4.6: Commit**
+- [ ] **Step 4.5: Commit**
 
 ```bash
-git add Cargo.toml build.rs contracts/asyncapi-snapshot.json .gitignore Cargo.lock
-git commit -m "🔧 build: Cargo deps + modelina codegen pipeline"
+git add Cargo.toml Cargo.lock src/asyncapi/mod.rs src/asyncapi/types.rs
+git commit -m "✨ feat: validated /asyncapi structs (Deserialize + Validate)"
 ```
 
 ---
@@ -553,6 +512,7 @@ pub fn load_config() -> anyhow::Result<Config> {
 
 ```rust
 mod app;
+mod asyncapi;
 mod config;
 mod http;
 mod modbus;
@@ -657,71 +617,27 @@ git commit -m "✨ feat: gateway config + main + module scaffolding"
 
 **Files:**
 - Rewrite: `src/http/client.rs`
-- Create: `src/http/client_test.rs`
 
-The HTTP fetch is the boot-time race surface (device-api takes ~30-60s to start). Backoff is a high-risk consumer-side resilience path that warrants a unit test.
+The HTTP fetch is the boot-time race surface (device-api takes ~30-60s to start). Exponential backoff handles it. Backoff coverage lives in the e2e test (real multi-container race) — no duplicate unit test.
 
-- [ ] **Step 6.1: Write the failing test**
-
-`src/http/client_test.rs`:
-
-```rust
-//! Unit test for fetch_asyncapi backoff. High-risk: boot-time multi-container race.
-
-use super::client::fetch_asyncapi;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-
-#[tokio::test]
-async fn retries_until_success() {
-    // Arrange: serve 503 twice then 200
-    let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_clone = attempts.clone();
-
-    let mock = httpmock::MockServer::start_async().await;
-    mock.mock_async(|when, then| {
-        when.path("/asyncapi");
-        then.status(503);
-    }).await;
-    // After two failures, swap mock for success.
-    // (Simplified: use httpmock's `times` count, or a custom handler.)
-    // For brevity: this test illustrates the contract; implementation may use
-    // wiremock or a hand-rolled async-trait stub.
-
-    let url = format!("{}/asyncapi", mock.base_url());
-    let _result = fetch_asyncapi(&url).await;
-
-    // Assert — business risk: gateway survives device-api slow boot
-    assert!(attempts_clone.load(Ordering::SeqCst) >= 1);
-}
-```
-
-(Hook this test in `src/http/client.rs` via `#[cfg(test)] mod client_test;` once `httpmock` is added to dev-deps. **Pragmatic alternative**: skip this unit test and let the e2e test prove backoff via the real multi-container race. Decision gate at Step 6.2.)
-
-- [ ] **Step 6.2: Decision — keep unit test, or rely on e2e for backoff coverage?**
-
-Per "tests have business value" + the spec's high-risk-only edge case rule: the e2e test ALREADY exercises this code path in the real boot race. A unit test is duplicate coverage of the same behavior. **Drop the unit test.** Delete `src/http/client_test.rs`.
-
-```bash
-rm src/http/client_test.rs
-```
-
-- [ ] **Step 6.3: Implement `src/http/client.rs`**
+- [ ] **Step 6.1: Implement `src/http/client.rs`**
 
 ```rust
 //! HTTP client for fetching /asyncapi from device-api with exponential backoff.
+//! Returns a fully validated AsyncApiSpec.
 
+use crate::asyncapi::types::AsyncApiSpec;
 use anyhow::{Context, Result};
-use backoff::ExponentialBackoff;
 use backoff::future::retry;
+use backoff::ExponentialBackoff;
 use reqwest::Client;
 use std::time::Duration;
 use tracing::warn;
+use validator::Validate;
 
-/// Fetch /asyncapi as raw JSON. Retries with exponential backoff on transient
-/// failures (connection refused, 5xx, timeout) — handles boot-time race
-/// when device-api is still warming up.
-pub async fn fetch_asyncapi(base_url: &str) -> Result<serde_json::Value> {
+/// Fetch /asyncapi, deserialize into AsyncApiSpec, and validate.
+/// Retries with exponential backoff on transient failures.
+pub async fn fetch_asyncapi(base_url: &str) -> Result<AsyncApiSpec> {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -746,26 +662,28 @@ pub async fn fetch_asyncapi(base_url: &str) -> Result<serde_json::Value> {
                 resp.status()
             )));
         }
-        let text = resp.text().await.map_err(|e| {
-            backoff::Error::permanent(anyhow::anyhow!(e))
-        })?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| backoff::Error::permanent(anyhow::anyhow!(e)))?;
         Ok(text)
     })
     .await
     .context("fetch /asyncapi exceeded backoff window")?;
 
-    let value: serde_json::Value =
-        serde_json::from_str(&body).context("parse /asyncapi JSON")?;
-    Ok(value)
+    let spec: AsyncApiSpec =
+        serde_json::from_str(&body).context("parse /asyncapi into AsyncApiSpec")?;
+    spec.validate().context("/asyncapi failed validation")?;
+    Ok(spec)
 }
 ```
 
-- [ ] **Step 6.4: Build + commit**
+- [ ] **Step 6.2: Build + commit**
 
 ```bash
 cargo build 2>&1 | tail -3
 git add src/http/client.rs
-git commit -m "✨ feat: HTTP client with exponential backoff for /asyncapi"
+git commit -m "✨ feat: HTTP client fetches + validates AsyncApiSpec"
 ```
 
 ---
@@ -941,17 +859,11 @@ pub async fn publish_measurement(
 }
 ```
 
-Add `chrono = "0.4"` to dependencies if not already present:
-
-```bash
-cargo add chrono --features serde 2>&1 | tail -3
-```
-
 - [ ] **Step 8.2: Build + commit**
 
 ```bash
 cargo build 2>&1 | tail -3
-git add Cargo.toml Cargo.lock src/mqtt/publisher.rs
+git add src/mqtt/publisher.rs
 git commit -m "✨ feat: MQTT publisher emits FloatSample"
 ```
 
@@ -1042,27 +954,21 @@ pub async fn run(cfg: Config) -> Result<()> {
     let mut client = publisher::connect(&cfg.broker_url, "ems-industrial-gateway").await?;
     subscriber::subscribe_topology_changed(&mut client).await?;
 
-    // Fetch the spec.
+    // Fetch + validate the spec.
     let spec = fetch_asyncapi(&cfg.device_api_url).await?;
-    info!(version = %spec.get("info").and_then(|i| i.get("version")).and_then(|v| v.as_str()).unwrap_or("?"), "spec fetched");
+    info!(version = %spec.info.version, "spec fetched");
 
     // Pull binding metadata for meter_01.kwh_delivered out of x-protocol-source.
     let binding = spec
-        .get("x-protocol-source")
-        .and_then(|p| p.get(DEVICE_ID))
-        .and_then(|d| d.get(MEASUREMENT))
+        .x_protocol_source
+        .get(DEVICE_ID)
+        .and_then(|m| m.get(MEASUREMENT))
         .context("x-protocol-source missing meter_01.kwh_delivered")?;
-    let host = binding.get("host").and_then(|v| v.as_str()).context("binding missing host")?;
-    let port = binding.get("port").and_then(|v| v.as_u64()).context("binding missing port")? as u16;
-    let unit_id = binding.get("unit_id").and_then(|v| v.as_u64()).context("binding missing unit_id")? as u8;
-    let addr = binding.get("address").and_then(|v| v.as_u64()).context("binding missing address")? as u16;
-    let scale = binding.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
-    let offset = binding.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
     // Read 2 registers (int32 = 2× u16).
-    let words = read_holding(host, port, unit_id, addr, 2).await?;
+    let words = read_holding(&binding.host, binding.port, binding.unit_id, binding.address, 2).await?;
     let raw = decode_int32(&words, WordOrder::HighLow);
-    let value = apply_scale_offset(raw, scale, offset);
+    let value = apply_scale_offset(raw, binding.scale, binding.offset);
     info!(raw, value, "modbus read complete");
 
     // Publish.
@@ -1185,7 +1091,7 @@ pub async fn start_emqx() -> anyhow::Result<ContainerAsync<GenericImage>> {
 /// Spin up mock-modbus-server fixture.
 pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new(
-        "registry.gitlab.com/arcnode-io/ems-industrial-fixtures/mock-modbus-server",
+        "173.211.12.43:8083/library/mock-modbus-server",
         "latest",
     )
     .with_exposed_port(ContainerPort::Tcp(502))
@@ -1203,7 +1109,7 @@ pub async fn start_device_api(
     emqx_port: u16,
 ) -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new(
-        "registry.gitlab.com/arcnode-io/ems-device-api",
+        "173.211.12.43:8083/library/ems-device-api",
         "latest",
     )
     .with_exposed_port(ContainerPort::Tcp(3000))
