@@ -4,6 +4,13 @@ use anyhow::{Context, Result};
 use rodbus::client::{HostAddr, RequestParam, spawn_tcp_client_task};
 use rodbus::{AddressRange, UnitId};
 use std::time::Duration;
+use tokio::time::sleep;
+use tracing::warn;
+
+/// Attempts to retry on transient "no connection to server" — rodbus channels
+/// reconnect in the background and the first read can race with the initial
+/// TCP handshake.
+const MAX_READ_ATTEMPTS: u32 = 5;
 
 /// Word order for multi-register integer decoding.
 #[derive(Debug, Clone, Copy)]
@@ -33,14 +40,20 @@ pub async fn read_holding(
 
     let range = AddressRange::try_from(addr, count)
         .map_err(|e| anyhow::anyhow!("invalid modbus address range: {e}"))?;
-    let result = channel
-        .read_holding_registers(
-            RequestParam::new(UnitId::new(unit_id), Duration::from_secs(5)),
-            range,
-        )
-        .await
-        .context("modbus read_holding_registers")?;
-    Ok(result.iter().map(|r| r.value).collect())
+    let param = RequestParam::new(UnitId::new(unit_id), Duration::from_secs(5));
+
+    let mut last_err = None;
+    for attempt in 0..MAX_READ_ATTEMPTS {
+        match channel.read_holding_registers(param, range).await {
+            Ok(result) => return Ok(result.iter().map(|r| r.value).collect()),
+            Err(e) => {
+                warn!(attempt, error = %e, "modbus read_holding_registers failed; retrying");
+                last_err = Some(e);
+                sleep(Duration::from_millis(500 * (1 << attempt))).await;
+            }
+        }
+    }
+    Err(last_err.unwrap()).context("modbus read_holding_registers exhausted retries")
 }
 
 /// Decode two consecutive u16 holding registers as a signed 32-bit integer.
