@@ -1,7 +1,7 @@
 //! Unit tests for the pure decode/scale helpers. High-risk: silent
 //! wrong-value bug if word order or scale are off.
 
-use super::client::{apply_scale_offset, decode_int32, WordOrder};
+use super::client::{WordOrder, apply_scale_offset, decode_int32};
 
 #[test]
 fn decode_int32_high_low() {

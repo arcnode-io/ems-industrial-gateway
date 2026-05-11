@@ -1,7 +1,7 @@
 //! Modbus TCP client + decode helpers.
 
 use anyhow::{Context, Result};
-use rodbus::client::{spawn_tcp_client_task, HostAddr, RequestParam};
+use rodbus::client::{HostAddr, RequestParam, spawn_tcp_client_task};
 use rodbus::{AddressRange, UnitId};
 use std::time::Duration;
 
@@ -56,4 +56,3 @@ pub fn decode_int32(words: &[u16], order: WordOrder) -> i32 {
 pub fn apply_scale_offset(raw: i32, scale: f64, offset: f64) -> f64 {
     raw as f64 * scale + offset
 }
-

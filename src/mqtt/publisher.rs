@@ -26,16 +26,15 @@ pub async fn connect(broker_url: &str, client_id: &str) -> Result<AsyncClient> {
         .keep_alive_interval(Duration::from_secs(20))
         .clean_session(true)
         .finalize();
-    client.connect(conn_opts).await.context("connect to broker")?;
+    client
+        .connect(conn_opts)
+        .await
+        .context("connect to broker")?;
     Ok(client)
 }
 
 /// Publish a FloatSample at QoS 1 to the given topic.
-pub async fn publish_measurement(
-    client: &AsyncClient,
-    topic: &str,
-    value: f64,
-) -> Result<()> {
+pub async fn publish_measurement(client: &AsyncClient, topic: &str, value: f64) -> Result<()> {
     let sample = FloatSample {
         ts: Utc::now().to_rfc3339(),
         value,

@@ -6,6 +6,7 @@ use futures::stream::StreamExt;
 use paho_mqtt::AsyncClient;
 use tracing::info;
 
+/// MQTT topic the gateway subscribes to for topology-change beacons.
 const TOPIC_TOPOLOGY_CHANGED: &str = "system/topology_changed";
 
 /// Subscribe to `system/topology_changed` and spawn a logging task.

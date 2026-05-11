@@ -54,10 +54,7 @@ pub async fn start_device_api(
         .with_env_var("POSTGRES_HOST", postgres_host)
         .with_env_var("POSTGRES_PORT", postgres_port.to_string())
         .with_env_var("POSTGRES_PASSWORD", "test")
-        .with_env_var(
-            "MQTT_BROKER_URL",
-            format!("mqtt://{emqx_host}:{emqx_port}"),
-        )
+        .with_env_var("MQTT_BROKER_URL", format!("mqtt://{emqx_host}:{emqx_port}"))
         .start()
         .await?;
     Ok(c)

@@ -1,3 +1,5 @@
+//! Binary entry: load cfg, init tracing, run the gateway one-shot.
+
 use ems_industrial_gateway::{app, config::load_config};
 
 #[tokio::main(flavor = "multi_thread")]

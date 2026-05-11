@@ -17,11 +17,8 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
-    let (pg, emqx, modbus_fix) = tokio::try_join!(
-        start_postgres(),
-        start_emqx(),
-        start_mock_modbus_server(),
-    )?;
+    let (pg, emqx, modbus_fix) =
+        tokio::try_join!(start_postgres(), start_emqx(), start_mock_modbus_server(),)?;
     let pg_host = pg.get_host().await?;
     let pg_port = pg.get_host_port_ipv4(5432).await?;
     let emqx_host = emqx.get_host().await?;

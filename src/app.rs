@@ -2,13 +2,16 @@
 
 use crate::config::Config;
 use crate::http::client::fetch_asyncapi;
-use crate::modbus::client::{apply_scale_offset, decode_int32, read_holding, WordOrder};
+use crate::modbus::client::{WordOrder, apply_scale_offset, decode_int32, read_holding};
 use crate::mqtt::{publisher, subscriber};
 use anyhow::{Context, Result};
 use tracing::info;
 
+/// Tier 1 hardcoded device id (matches the seeded DTM).
 const DEVICE_ID: &str = "meter_01";
+/// Tier 1 hardcoded measurement.
 const MEASUREMENT: &str = "kwh_delivered";
+/// Engineering unit of the measurement (matches the template binding).
 const UNIT: &str = "watt_hours";
 
 /// Tier 1 flow: read one meter_01 register, publish one FloatSample, exit.
@@ -36,7 +39,14 @@ pub async fn run(cfg: Config) -> Result<()> {
         .context("x-protocol-source missing meter_01.kwh_delivered")?;
 
     // int32 = 2× u16 registers.
-    let words = read_holding(&binding.host, binding.port, binding.unit_id, binding.address, 2).await?;
+    let words = read_holding(
+        &binding.host,
+        binding.port,
+        binding.unit_id,
+        binding.address,
+        2,
+    )
+    .await?;
     let raw = decode_int32(&words, WordOrder::HighLow);
     let value = apply_scale_offset(raw, binding.scale, binding.offset);
     info!(raw, value, "modbus read complete");

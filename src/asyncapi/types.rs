@@ -12,8 +12,10 @@ use validator::Validate;
 /// Extra keys in the JSON are ignored by serde's default behavior.
 #[derive(Debug, Deserialize, Validate)]
 pub struct AsyncApiSpec {
+    /// Spec metadata block (carries `version` for cache-keying).
     #[validate(nested)]
     pub info: SpecInfo,
+    /// Per-device, per-measurement protocol bindings (the gateway's payload).
     #[serde(rename = "x-protocol-source")]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolBinding>>,
 }
@@ -21,6 +23,7 @@ pub struct AsyncApiSpec {
 /// AsyncAPI info block.
 #[derive(Debug, Deserialize, Validate)]
 pub struct SpecInfo {
+    /// Monotonic version assigned by device-api on persist.
     #[validate(length(min = 1))]
     pub version: String,
 }
@@ -28,12 +31,18 @@ pub struct SpecInfo {
 /// Per-device, per-measurement protocol binding (Tier 1: Modbus only).
 #[derive(Debug, Deserialize, Validate)]
 pub struct ProtocolBinding {
+    /// Target host (IP or DNS) for the protocol connection.
     #[validate(length(min = 1))]
     pub host: String,
+    /// TCP port for the protocol connection.
     #[validate(range(min = 1, max = 65535))]
     pub port: u16,
+    /// Modbus unit id (slave id).
     pub unit_id: u8,
+    /// Starting register address.
     pub address: u16,
+    /// Linear-scale factor applied to the raw register value.
     pub scale: f64,
+    /// Linear offset applied after scaling.
     pub offset: f64,
 }
