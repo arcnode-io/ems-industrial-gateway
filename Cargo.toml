@@ -12,6 +12,7 @@ missing_docs = "warn"
 
 [dependencies]
 rodbus = "1.4"
+csnmp = "0.6"
 paho-mqtt = "0.13"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }

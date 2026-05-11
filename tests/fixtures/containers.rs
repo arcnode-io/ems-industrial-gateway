@@ -52,6 +52,16 @@ pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<Generic
     Ok(c)
 }
 
+/// Spin up mock-snmp-agent. UDP 161 mapped; gateway reaches it via host port.
+pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("173.211.12.43:8083/library/mock-snmp-agent", "latest")
+        .with_exposed_port(ContainerPort::Udp(161))
+        .with_wait_for(WaitFor::message_on_stdout("mock-snmp-agent listening"))
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
 /// `emqx` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {

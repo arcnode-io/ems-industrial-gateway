@@ -1,45 +1,56 @@
-//! E2E: validate the AsyncAPI/Modbus/MQTT contract end-to-end.
-//! 4 testcontainers + real gateway binary in-process.
+//! E2E: validate the AsyncAPI / Modbus / SNMP / MQTT contract end-to-end.
+//! 5 testcontainers + real gateway binary in-process.
 
 mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
 use fixtures::containers::{
-    start_device_api, start_emqx, start_mock_modbus_server, start_postgres,
+    start_device_api, start_emqx, start_mock_modbus_server, start_mock_snmp_agent, start_postgres,
 };
 use futures::StreamExt;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
+async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
-    let (pg, emqx, modbus_fix) =
-        tokio::try_join!(start_postgres(), start_emqx(), start_mock_modbus_server(),)?;
-    // pg + emqx are on the shared Docker network — device-api reaches them by hostname.
-    // We hold the handles so they stay running, but don't need to read their host/port.
+    let (pg, emqx, modbus_fix, snmp_fix) = tokio::try_join!(
+        start_postgres(),
+        start_emqx(),
+        start_mock_modbus_server(),
+        start_mock_snmp_agent(),
+    )?;
     let _ = (&pg, &emqx);
     let emqx_port = emqx.get_host_port_ipv4(1883).await?;
     let modbus_host = modbus_fix.get_host().await?;
     let modbus_port = modbus_fix.get_host_port_ipv4(502).await?;
+    let snmp_host = snmp_fix.get_host().await?;
+    let snmp_port = snmp_fix.get_host_port_ipv4(161).await?;
 
     let device_api = start_device_api().await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
 
-    // Wire the fixture's host:port into the seed DTM.
+    // Wire fixture host:port into seed DTM (meter_01 → modbus; pdu_01 → snmp).
     let dtm_template = include_str!("fixtures/seed_dtm.json");
     let dtm_json: Value = serde_json::from_str(dtm_template)?;
     let mut dtm = dtm_json.as_object().unwrap().clone();
     let mut devices = dtm["devices"].as_object().unwrap().clone();
-    let mut meter = devices["meter_01"].as_object().unwrap().clone();
-    let mut connection = meter["connection"].as_object().unwrap().clone();
-    connection.insert("host".to_string(), Value::String(modbus_host.to_string()));
-    connection.insert("port".to_string(), Value::Number(modbus_port.into()));
-    meter.insert("connection".to_string(), Value::Object(connection));
-    devices.insert("meter_01".to_string(), Value::Object(meter));
+
+    for (device_id, host, port) in [
+        ("meter_01", modbus_host.to_string(), modbus_port),
+        ("pdu_01", snmp_host.to_string(), snmp_port),
+    ] {
+        let mut device = devices[device_id].as_object().unwrap().clone();
+        let mut connection = device["connection"].as_object().unwrap().clone();
+        connection.insert("host".to_string(), Value::String(host));
+        connection.insert("port".to_string(), Value::Number(port.into()));
+        device.insert("connection".to_string(), Value::Object(connection));
+        devices.insert(device_id.to_string(), Value::Object(device));
+    }
     dtm.insert("devices".to_string(), Value::Object(devices));
     let dtm_body = Value::Object(dtm);
 
@@ -55,7 +66,7 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
         panic!("POST /topology failed: status={status} body={body}");
     }
 
-    // Subscribe with a test-side MQTT client to verify the gateway's publish.
+    // Subscribe to both expected topics.
     let broker_url = format!("tcp://localhost:{emqx_port}");
     let create_opts = CreateOptionsBuilder::new()
         .server_uri(&broker_url)
@@ -65,9 +76,12 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
     let mut stream = sub.get_stream(64);
     sub.connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
         .await?;
-    sub.subscribe(
-        "sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours",
-        1,
+    sub.subscribe_many(
+        &[
+            "sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours".to_string(),
+            "sites/site_001/devices/pdu_01/measurements/input_current/amps".to_string(),
+        ],
+        &[1, 1],
     )
     .await?;
 
@@ -80,16 +94,31 @@ async fn gateway_reads_modbus_and_publishes_to_mqtt() -> Result<()> {
     };
     app::run(cfg).await?;
 
-    // Assert — fixture's sawtooth simulator keeps kwh_delivered in
-    // [1_000_000, 1_010_000] step 100; assert the published value falls in
-    // that range (not exact equality — value depends on tick timing).
-    let received = timeout(Duration::from_secs(5), stream.next()).await?;
-    let msg = received.flatten().expect("expected MQTT message");
-    let payload: Value = serde_json::from_slice(msg.payload())?;
-    let value = payload["value"].as_f64().unwrap();
+    // Assert — collect both publishes within 10s, verify each value's range.
+    let mut received: HashMap<String, f64> = HashMap::new();
+    while received.len() < 2 {
+        let msg = timeout(Duration::from_secs(10), stream.next())
+            .await?
+            .flatten()
+            .expect("expected MQTT message");
+        let payload: Value = serde_json::from_slice(msg.payload())?;
+        received.insert(msg.topic().to_string(), payload["value"].as_f64().unwrap());
+    }
+
+    let kwh = received
+        .get("sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours")
+        .expect("modbus publish missing");
     assert!(
-        (1_000_000.0..=1_010_000.0).contains(&value),
-        "value {value} outside expected sawtooth range [1_000_000, 1_010_000]",
+        (1_000_000.0..=1_010_000.0).contains(kwh),
+        "kwh_delivered {kwh} outside expected sawtooth range [1_000_000, 1_010_000]",
+    );
+
+    let amps = received
+        .get("sites/site_001/devices/pdu_01/measurements/input_current/amps")
+        .expect("snmp publish missing");
+    assert!(
+        (100.0..=200.0).contains(amps),
+        "input_current {amps} outside expected sawtooth range [100, 200]",
     );
 
     Ok(())

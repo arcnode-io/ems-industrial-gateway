@@ -7,3 +7,4 @@ pub mod config;
 pub mod http;
 pub mod modbus;
 pub mod mqtt;
+pub mod snmp;

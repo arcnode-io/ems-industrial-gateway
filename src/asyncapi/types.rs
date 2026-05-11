@@ -15,7 +15,7 @@ pub struct AsyncApiSpec {
     /// Spec metadata block (carries `version` for cache-keying).
     #[validate(nested)]
     pub info: SpecInfo,
-    /// Per-device, per-measurement protocol bindings (the gateway's payload).
+    /// Per-device, per-measurement protocol bindings.
     #[serde(rename = "x-protocol-source")]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolBinding>>,
 }
@@ -28,9 +28,23 @@ pub struct SpecInfo {
     pub version: String,
 }
 
-/// Per-device, per-measurement protocol binding (Tier 1: Modbus only).
+/// Per-device, per-measurement protocol binding. Variants discriminated by
+/// the `protocol` key in JSON (matches `template.protocols.schema.ts`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "protocol")]
+pub enum ProtocolBinding {
+    /// Modbus TCP binding.
+    #[serde(rename = "modbus_tcp")]
+    ModbusTcp(ModbusTcpBinding),
+    /// SNMP (v2c) binding.
+    #[serde(rename = "snmp")]
+    Snmp(SnmpBinding),
+}
+
+/// Modbus TCP binding fields (template + device.connection merged in
+/// device-api's `x-protocol-source` extension).
 #[derive(Debug, Deserialize, Validate)]
-pub struct ProtocolBinding {
+pub struct ModbusTcpBinding {
     /// Target host (IP or DNS) for the protocol connection.
     #[validate(length(min = 1))]
     pub host: String,
@@ -46,4 +60,18 @@ pub struct ProtocolBinding {
     pub scale: f64,
     /// Linear offset applied after scaling.
     pub offset: f64,
+}
+
+/// SNMP v2c binding fields.
+#[derive(Debug, Deserialize, Validate)]
+pub struct SnmpBinding {
+    /// Target host (IP or DNS) for the SNMP agent.
+    #[validate(length(min = 1))]
+    pub host: String,
+    /// UDP port for the SNMP agent (default 161).
+    #[validate(range(min = 1, max = 65535))]
+    pub port: u16,
+    /// Object identifier in dotted-numeric form, e.g. "1.3.6.1.4.1.41999.1.1.0".
+    #[validate(length(min = 1))]
+    pub oid: String,
 }
