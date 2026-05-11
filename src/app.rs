@@ -39,14 +39,11 @@ pub async fn run(cfg: Config) -> Result<()> {
         .context("x-protocol-source missing meter_01.kwh_delivered")?;
 
     // int32 = 2× u16 registers.
-    let words = read_holding(
-        &binding.host,
-        binding.port,
-        binding.unit_id,
-        binding.address,
-        2,
-    )
-    .await?;
+    let unit_id: u8 = binding
+        .unit_id
+        .parse()
+        .context("unit_id must parse to u8 for Modbus")?;
+    let words = read_holding(&binding.host, binding.port, unit_id, binding.address, 2).await?;
     let raw = decode_int32(&words, WordOrder::HighLow);
     let value = apply_scale_offset(raw, binding.scale, binding.offset);
     info!(raw, value, "modbus read complete");

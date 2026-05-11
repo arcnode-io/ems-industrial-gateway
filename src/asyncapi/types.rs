@@ -37,8 +37,9 @@ pub struct ProtocolBinding {
     /// TCP port for the protocol connection.
     #[validate(range(min = 1, max = 65535))]
     pub port: u16,
-    /// Modbus unit id (slave id).
-    pub unit_id: u8,
+    /// Modbus unit id (slave id). String in DTM to allow non-numeric IDs for
+    /// non-Modbus protocols; gateway parses to u8 at the Modbus call site.
+    pub unit_id: String,
     /// Starting register address.
     pub address: u16,
     /// Linear-scale factor applied to the raw register value.
