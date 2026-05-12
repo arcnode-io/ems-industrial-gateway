@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::http::client::fetch_asyncapi;
 use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
+use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
 use anyhow::{Context, Result};
 use tracing::info;
@@ -31,6 +32,11 @@ const TARGETS: &[Target] = &[
         device_id: "pdu_01",
         measurement: "input_current",
         unit: "amps",
+    },
+    Target {
+        device_id: "switch_01",
+        measurement: "inlet_temp",
+        unit: "celsius",
     },
 ];
 
@@ -93,5 +99,6 @@ async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
     match binding {
         ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b).await,
         ProtocolBinding::Snmp(b) => snmp::read_measurement(b).await,
+        ProtocolBinding::Redfish(b) => redfish::read_measurement(b).await,
     }
 }

@@ -40,6 +40,9 @@ pub enum ProtocolBinding {
     /// SNMP (v2c) binding.
     #[serde(rename = "snmp")]
     Snmp(SnmpBinding),
+    /// Redfish (HTTP+JSON) binding.
+    #[serde(rename = "redfish")]
+    Redfish(RedfishBinding),
 }
 
 /// Modbus TCP binding fields (template + device.connection merged in
@@ -70,4 +73,19 @@ pub struct SnmpBinding {
     pub port: u16,
     /// Object identifier in dotted-numeric form, e.g. "1.3.6.1.4.1.41999.1.1.0".
     pub oid: String,
+}
+
+/// Redfish (HTTP+JSON, DSP0266) binding fields.
+#[derive(Debug, Deserialize)]
+pub struct RedfishBinding {
+    /// Target host (IP or DNS) for the Redfish service.
+    pub host: String,
+    /// HTTP(S) port for the Redfish service (default 8443 or 443).
+    pub port: u16,
+    /// Resource URI relative to the service root, e.g. "/Chassis/SW1/Thermal".
+    /// Gateway prepends `/redfish/v1`.
+    pub uri: String,
+    /// JSON Pointer (RFC 6901) into the response body, e.g.
+    /// "/Temperatures/0/ReadingCelsius". Null means the response IS the value.
+    pub json_pointer: Option<String>,
 }

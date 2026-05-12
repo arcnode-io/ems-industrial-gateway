@@ -28,6 +28,17 @@
         "unit_id": null
       },
       "blocking": []
+    },
+    "switch_01": {
+      "device_id": "switch_01",
+      "template": "network_switch",
+      "parent": null,
+      "connection": {
+        "host": "<replaced-at-test-time>",
+        "port": 8443,
+        "unit_id": null
+      },
+      "blocking": []
     }
   },
   "buses": [],
@@ -71,6 +82,26 @@
           "binding": {
             "protocol": "snmp",
             "oid": "1.3.6.1.4.1.1718.4.1.3.3.1.7"
+          }
+        }
+      }
+    },
+    "network_switch": {
+      "template": "network_switch",
+      "kind": "leaf",
+      "equipment_id": "CMP-SWITCH-001",
+      "vendor": "NVIDIA (Mellanox)",
+      "model": "Spectrum-X SN5600",
+      "description": "NVIDIA Spectrum-X SN5600 64-port 800GbE ToR switch with Redfish telemetry",
+      "measurements": {
+        "inlet_temp": {
+          "unit": "celsius",
+          "type": "float",
+          "poll_rate_hz": 0.5,
+          "binding": {
+            "protocol": "redfish",
+            "uri": "/Chassis/SW1/Thermal",
+            "json_pointer": "/Temperatures/0/ReadingCelsius"
           }
         }
       }

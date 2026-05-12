@@ -62,6 +62,16 @@ pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericIma
     Ok(c)
 }
 
+/// Spin up mock-redfish-service. HTTP on TCP 8443 mapped to host.
+pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("173.211.12.43:8083/library/mock-redfish-service", "latest")
+        .with_exposed_port(ContainerPort::Tcp(8443))
+        .with_wait_for(WaitFor::message_on_stdout("mock-redfish-service listening"))
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
 /// `emqx` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {

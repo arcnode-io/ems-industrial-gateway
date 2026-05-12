@@ -6,7 +6,8 @@ mod fixtures;
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
 use fixtures::containers::{
-    start_device_api, start_emqx, start_mock_modbus_server, start_mock_snmp_agent, start_postgres,
+    start_device_api, start_emqx, start_mock_modbus_server, start_mock_redfish_service,
+    start_mock_snmp_agent, start_postgres,
 };
 use futures::StreamExt;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
@@ -17,13 +18,14 @@ use testcontainers::core::ContainerPort;
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
+async fn gateway_reads_three_protocols_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
-    let (pg, emqx, modbus_fix, snmp_fix) = tokio::try_join!(
+    let (pg, emqx, modbus_fix, snmp_fix, redfish_fix) = tokio::try_join!(
         start_postgres(),
         start_emqx(),
         start_mock_modbus_server(),
         start_mock_snmp_agent(),
+        start_mock_redfish_service(),
     )?;
     let _ = (&pg, &emqx);
     let emqx_port = emqx.get_host_port_ipv4(1883).await?;
@@ -31,11 +33,13 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     let modbus_port = modbus_fix.get_host_port_ipv4(502).await?;
     let snmp_host = snmp_fix.get_host().await?;
     let snmp_port = snmp_fix.get_host_port_ipv4(ContainerPort::Udp(161)).await?;
+    let redfish_host = redfish_fix.get_host().await?;
+    let redfish_port = redfish_fix.get_host_port_ipv4(8443).await?;
 
     let device_api = start_device_api().await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
 
-    // Wire fixture host:port into seed DTM (meter_01 → modbus; pdu_01 → snmp).
+    // Wire fixture host:port into seed DTM (meter_01 → modbus; pdu_01 → snmp; switch_01 → redfish).
     let dtm_template = include_str!("fixtures/seed_dtm.json");
     let dtm_json: Value = serde_json::from_str(dtm_template)?;
     let mut dtm = dtm_json.as_object().unwrap().clone();
@@ -44,6 +48,7 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     for (device_id, host, port) in [
         ("meter_01", modbus_host.to_string(), modbus_port),
         ("pdu_01", snmp_host.to_string(), snmp_port),
+        ("switch_01", redfish_host.to_string(), redfish_port),
     ] {
         let mut device = devices[device_id].as_object().unwrap().clone();
         let mut connection = device["connection"].as_object().unwrap().clone();
@@ -81,8 +86,9 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
         &[
             "sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours".to_string(),
             "sites/site_001/devices/pdu_01/measurements/input_current/amps".to_string(),
+            "sites/site_001/devices/switch_01/measurements/inlet_temp/celsius".to_string(),
         ],
-        &[1, 1],
+        &[1, 1, 1],
     )
     .await?;
 
@@ -95,9 +101,9 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     };
     app::run(cfg).await?;
 
-    // Assert — collect both publishes within 10s, verify each value's range.
+    // Assert — collect all three publishes within 10s, verify each value's range.
     let mut received: HashMap<String, f64> = HashMap::new();
-    while received.len() < 2 {
+    while received.len() < 3 {
         let msg = timeout(Duration::from_secs(10), stream.next())
             .await?
             .flatten()
@@ -120,6 +126,14 @@ async fn gateway_reads_modbus_and_snmp_and_publishes_to_mqtt() -> Result<()> {
     assert!(
         (100.0..=200.0).contains(amps),
         "input_current {amps} outside expected sawtooth range [100, 200]",
+    );
+
+    let inlet = received
+        .get("sites/site_001/devices/switch_01/measurements/inlet_temp/celsius")
+        .expect("redfish publish missing");
+    assert!(
+        (20.0..=30.0).contains(inlet),
+        "inlet_temp {inlet} outside expected sawtooth range [20, 30]",
     );
 
     Ok(())
