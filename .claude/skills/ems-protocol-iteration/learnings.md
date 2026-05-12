@@ -119,3 +119,81 @@ No app.rs surgery, no copy-paste. The trait extraction from the SNMP→Redfish g
 - Redfish URIs in templates are relative to `/redfish/v1`. Gateway client owns the prefix.
 - axum 0.8's `axum::Json<Value>` + `serde_json::json!()` macro = trivial fixture handlers. Don't over-engineer with custom serializers.
 - For first-time-only-protocol cases, a "skin" test that just GETs the fixture's URL with `curl` during smoke validation can catch shape mistakes before testcontainers boot.
+
+---
+
+## DNP3 (2026-05-12)
+
+**Library:** `dnp3 1.6.0` from Step Function Inc. Has both `dnp3::master::*` (client) and `dnp3::outstation::*` (server) — fixture and gateway share one crate. Good docs but the API has tendrils across `dnp3::{app,link,master,outstation,tcp}::*` with non-obvious re-exports.
+
+**Module-path gotchas (cost real time):**
+- `Variation` is at `dnp3::app::Variation` (re-exported from a private `variations` module). Don't try `dnp3::app::variations::Variation` — that path is private.
+- `Flags` is at `dnp3::app::measurement::Flags` (not `dnp3::app::Flags`).
+- `EndpointAddress` + `LinkErrorMode` live in `dnp3::link::*` — used by **both** master + outstation.
+- `EndpointList` is in `dnp3::tcp::*` (not `dnp3::master::*`).
+- `ResponseHeader` is in `dnp3::app::*` (master's `ReadHandler` consumes it, but it's an app-layer type).
+- `Classes`, `EventClasses`, `MasterChannelConfig`, `AssociationConfig`, `AssociationHandler`, `AssociationInformation`, `ReadHandler`, `ReadRequest`, `ReadType`, `HeaderInfo` are all in `dnp3::master::*`.
+- `EventBufferConfig`, `Add`, `Update`, `UpdateOptions`, `AnalogInputConfig`, `EventClass` (and all the other DB config types) are in `dnp3::outstation::database::*`.
+- The methods `db.add(...)` and `db.update(...)` require `use dnp3::outstation::database::{Add, Update};` (trait methods) — the names look like inherent methods but they're traits.
+
+**`spawn_master_tcp_client` signature has 5 args, not 6:**
+```rust
+spawn_master_tcp_client(
+    LinkErrorMode::Close,
+    MasterChannelConfig::new(EndpointAddress::try_new(1)?),
+    EndpointList::single(endpoint.to_string()),
+    ConnectStrategy::default(),
+    NullListener::create(),
+)
+```
+There is no `ConnectOptions` parameter. `ConnectStrategy` controls retry/backoff timing.
+
+**`AssociationConfig` has no `quiet()` constructor.** Use `::new(unsol_class_1_2_3, startup_integrity, event_scan_class_1_2_3, auto_time_sync_class)` — match the crate's master example. There's no public field for `decode_level` or `retry_strategy`; tweak those at channel-level config.
+
+**`ReadRequest::one_byte_range(Variation::Group30Var1, start, stop)` for a single AnalogInput.** `start` and `stop` are `u8`, so Tier 1 caps `point_index` at u8 range (255 max). Group 30 Var 1 = 32-bit-with-flag AnalogInput static read.
+
+**Read handler trait — the only method that ever fires on a static-read response is `handle_analog_input`:**
+```rust
+fn handle_analog_input(
+    &mut self,
+    _info: HeaderInfo,
+    iter: &mut dyn Iterator<Item = (AnalogInput, u16)>,
+) {
+    for (ai, idx) in iter {
+        // ai.value is f64; idx is the point_index
+    }
+}
+```
+Tuple order is `(AnalogInput, u16)` not `(u16, AnalogInput)` — the index is second. Easy to write the destructure backwards.
+
+**Outstation ControlHandler is 5 traits bundled:** `ControlSupport<Group12Var1>` + `ControlSupport<Group41Var1>` + `<Group41Var2>` + `<Group41Var3>` + `<Group41Var4>`, plus the base `ControlHandler` trait. Even a read-only outstation has to satisfy all 5 (the master can theoretically send any of them). Stamp them out with a `macro_rules! reject_control` that emits `select`/`operate` returning `CommandStatus::NotSupported`. Add a doc comment on the macro to satisfy `clippy::missing_docs_in_private_items`.
+
+**Outstation server boot:**
+```rust
+let server = Server::new_tcp_server(LinkErrorMode::Close, addr);
+let outstation = server.add_outstation(/* config */ ...);
+outstation.transaction(|db| db.add(point_index, Some(EventClass::Class1), AnalogInputConfig::default()));
+server.bind().await?; // returns ServerHandle; spawn the await in a task or it blocks
+```
+`server.bind()` is the listening point — that's the wait-strategy log line target.
+
+**Schema gotchas:**
+- DTM `Dnp3TcpBinding` (gateway side): `{ protocol: "dnp3_tcp", host, port, point_index: u16, point_type: String }`. `point_type` exists so we can branch on `analog_input` vs `binary_input` later; Tier 1 only handles `analog_input`. (Connection.host/port are merged in by spec-extensions just like other protocols.)
+- The DTM template `protective_relay` uses `binding.protocol = "dnp3_tcp"` to match the discriminator.
+- `unit_id` in connection block is `null` for DNP3 (link-layer addresses are in the gateway client constants, not per-device).
+
+**Test gotchas:**
+- `start_mock_dnp3_outstation` exposes `ContainerPort::Tcp(20000)`. Standard pattern.
+- Test now spins up 7 containers (postgres, emqx, device-api, mock-modbus-server, mock-snmp-agent, mock-redfish-service, mock-dnp3-outstation). DNS network membership unchanged — only the 3 stack containers (postgres/emqx/device-api) are on `gateway-e2e`.
+- Sawtooth range for `phase_a_current` is [100, 200] amps; assertion uses `(100.0..=200.0).contains(amps)`.
+
+**Retry/handshake:**
+- DNP3 TCP master does its own integrity poll on association add; before the gateway's `association.read(...)` lands, the startup poll has to complete. In practice on a fresh outstation this is fast enough that the first attempt succeeds — but kept the 5-attempt `500ms * 2^n` retry from the other protocols for the same reasons.
+- One unexpected: the master's `enable()` must be called AFTER `add_association`, not before. Otherwise the association sits orphaned and `read()` hangs.
+
+**ProtocolBinding enum still paying off:** Adding DNP3 was exactly 3 changes on the gateway side (same as Redfish): new enum variant, new module `src/dnp3/{mod,client}.rs`, one `match` arm + one `TARGETS` entry in `app.rs`. No surgery.
+
+**What I wish I'd known before starting DNP3:**
+- The `dnp3` crate's API surface is deep across many modules. Before writing any client code, read `master/examples/master.rs` AND `outstation/examples/outstation.rs` from the crate — they show the imports needed and the wiring shape. Saves an hour of "unresolved import" whack-a-mole.
+- `ControlHandler` is unavoidable on the outstation side even for read-only mocks. Plan to write the `reject_control!` macro on day one.
+- `Variation` is publicly at `dnp3::app::Variation`, not `dnp3::master::Variation`. Look for re-exports before reaching for absolute private paths.
