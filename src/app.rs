@@ -2,6 +2,7 @@
 
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding};
 use crate::config::Config;
+use crate::dnp3::client as dnp3;
 use crate::http::client::fetch_asyncapi;
 use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
@@ -37,6 +38,11 @@ const TARGETS: &[Target] = &[
         device_id: "switch_01",
         measurement: "inlet_temp",
         unit: "celsius",
+    },
+    Target {
+        device_id: "relay_01",
+        measurement: "phase_a_current",
+        unit: "amps",
     },
 ];
 
@@ -100,5 +106,6 @@ async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
         ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b).await,
         ProtocolBinding::Snmp(b) => snmp::read_measurement(b).await,
         ProtocolBinding::Redfish(b) => redfish::read_measurement(b).await,
+        ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b).await,
     }
 }

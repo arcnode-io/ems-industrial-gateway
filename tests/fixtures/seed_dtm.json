@@ -39,6 +39,17 @@
         "unit_id": null
       },
       "blocking": []
+    },
+    "relay_01": {
+      "device_id": "relay_01",
+      "template": "protective_relay",
+      "parent": null,
+      "connection": {
+        "host": "<replaced-at-test-time>",
+        "port": 20000,
+        "unit_id": null
+      },
+      "blocking": []
     }
   },
   "buses": [],
@@ -102,6 +113,26 @@
             "protocol": "redfish",
             "uri": "/Chassis/SW1/Thermal",
             "json_pointer": "/Temperatures/0/ReadingCelsius"
+          }
+        }
+      }
+    },
+    "protective_relay": {
+      "template": "protective_relay",
+      "kind": "leaf",
+      "equipment_id": "GRD-RLY-001",
+      "vendor": "Schweitzer Engineering Laboratories (SEL)",
+      "model": "SEL-351-7",
+      "description": "SEL-351-7 feeder protection relay (overcurrent, voltage, frequency, synchrocheck) via DNP3 TCP",
+      "measurements": {
+        "phase_a_current": {
+          "unit": "amps",
+          "type": "float",
+          "poll_rate_hz": 1,
+          "binding": {
+            "protocol": "dnp3_tcp",
+            "point_index": 0,
+            "point_type": "analog_input"
           }
         }
       }

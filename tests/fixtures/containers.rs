@@ -72,6 +72,16 @@ pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<Gener
     Ok(c)
 }
 
+/// Spin up mock-dnp3-outstation. TCP 20000 mapped to host.
+pub async fn start_mock_dnp3_outstation() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("173.211.12.43:8083/library/mock-dnp3-outstation", "latest")
+        .with_exposed_port(ContainerPort::Tcp(20000))
+        .with_wait_for(WaitFor::message_on_stdout("mock-dnp3-outstation listening"))
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
 /// `emqx` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {

@@ -43,6 +43,9 @@ pub enum ProtocolBinding {
     /// Redfish (HTTP+JSON) binding.
     #[serde(rename = "redfish")]
     Redfish(RedfishBinding),
+    /// DNP3 over TCP binding.
+    #[serde(rename = "dnp3_tcp")]
+    Dnp3Tcp(Dnp3TcpBinding),
 }
 
 /// Modbus TCP binding fields (template + device.connection merged in
@@ -88,4 +91,18 @@ pub struct RedfishBinding {
     /// JSON Pointer (RFC 6901) into the response body, e.g.
     /// "/Temperatures/0/ReadingCelsius". Null means the response IS the value.
     pub json_pointer: Option<String>,
+}
+
+/// DNP3 TCP binding fields.
+#[derive(Debug, Deserialize)]
+pub struct Dnp3TcpBinding {
+    /// Target host (IP or DNS) for the outstation.
+    pub host: String,
+    /// TCP port (default 20000).
+    pub port: u16,
+    /// DNP3 point index on the outstation.
+    pub point_index: u16,
+    /// Point object class: `analog_input`, `binary_input`, `counter`, etc.
+    /// Tier 1 only reads `analog_input`.
+    pub point_type: String,
 }

@@ -4,6 +4,7 @@
 pub mod app;
 pub mod asyncapi;
 pub mod config;
+pub mod dnp3;
 pub mod http;
 pub mod modbus;
 pub mod mqtt;
