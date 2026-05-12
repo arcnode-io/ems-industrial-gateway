@@ -8,9 +8,8 @@ description: Use when adding a new south-side grid protocol (Modbus TCP / Modbus
 For each new south-side protocol N, execute the 6 phases below. Read `learnings.md` BEFORE Phase 1 — it captures gotchas from prior rounds that this round must respect.
 
 **Status (from edp-module-assemblies equipment scope):**
-- ✅ Done: Modbus TCP, SNMP v2c, Redfish, DNP3 TCP
-- ⏳ Pending: BACnet MS-TP (EXT-DC-001, EXT-DC-002 cooling), Modbus RTU (GRD-XFM-001 transformer thermometer)
-- ❌ Dead: CANopen — EXT-BESS-002 (CATL) exposes Modbus TCP via MBMU ETH/RJ45; no CAN integration needed
+- ✅ Done: Modbus TCP, SNMP v2c, Redfish, DNP3 TCP, BACnet/IP
+- ⏳ Open: none — Modbus RTU devices (GRD-XFM-001) are covered by the existing Modbus TCP client when fronted by a serial→Ethernet bridge (Moxa NPort etc.) on-prem. BACnet MS-TP devices (EXT-DC-001, EXT-DC-002 cooling) are covered by the existing BACnet/IP client when fronted by a BACnet router (Loytec, Easy/IO, ABB).
 
 **Announce at start:** "I'm using the ems-protocol-iteration skill to add <PROTOCOL>."
 
@@ -23,7 +22,7 @@ For each new south-side protocol N, execute the 6 phases below. Read `learnings.
 
 ## Phase 1: Survey + Select Library
 
-- [ ] Query domain MCP (`mcp__domain__rag_search`) with specific terms for the protocol's wire format + key operations (e.g., "SNMP v3 GET PDU + authentication", "DNP3 object groups 30/40 read"). Strong coverage exists for Modbus, SNMPv3, Redfish; DNP3 is thin (Clarke is vector-only); CANopen is absent. If the corpus is silent, use context7 or websearch.
+- [ ] Query domain MCP (`mcp__domain__rag_search`) with specific terms for the protocol's wire format + key operations (e.g., "SNMP v3 GET PDU + authentication", "DNP3 object groups 30/40 read"). Strong coverage exists for Modbus, SNMPv3, Redfish; DNP3 is thin (Clarke is vector-only). If the corpus is silent, use context7 or websearch.
 - [ ] Crates.io: identify Rust library candidates. Prefer one with both client + server impls so the fixture and gateway share a library. Examples that worked for Modbus: `rodbus 1.4`. Check `max_stable` version + last-update date via crates.io API.
 - [ ] Verify the library's API surface against the fullstack-energy reference at `~/fullstack-energy/{grid-gateway,fixtures}/` — its code is "very bad" per the user but the API call patterns are real.
 - [ ] STOP and present the library choice with one-sentence rationale before proceeding.
