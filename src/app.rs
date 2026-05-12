@@ -3,27 +3,38 @@
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding};
 use crate::config::Config;
 use crate::http::client::fetch_asyncapi;
-use crate::modbus::client::{WordOrder, apply_scale_offset, decode_int32, read_holding};
+use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
-use crate::snmp::client::read_integer;
+use crate::snmp::client as snmp;
 use anyhow::{Context, Result};
 use tracing::info;
 
-/// Tier 1 / Modbus device id (matches the seeded DTM).
-const MODBUS_DEVICE_ID: &str = "meter_01";
-/// Modbus measurement channel.
-const MODBUS_MEASUREMENT: &str = "kwh_delivered";
-/// Engineering unit of the Modbus measurement.
-const MODBUS_UNIT: &str = "watt_hours";
+/// A measurement the gateway will read + publish each tick. Until Tier 2
+/// walks /asyncapi for every channel, we hardcode the few we care about.
+struct Target {
+    /// Device slug (matches the DTM key).
+    device_id: &'static str,
+    /// Measurement name on the device's template.
+    measurement: &'static str,
+    /// Engineering unit, used as the terminal MQTT topic segment.
+    unit: &'static str,
+}
 
-/// Tier 1 / SNMP device id (matches the seeded DTM).
-const SNMP_DEVICE_ID: &str = "pdu_01";
-/// SNMP measurement channel.
-const SNMP_MEASUREMENT: &str = "input_current";
-/// Engineering unit of the SNMP measurement.
-const SNMP_UNIT: &str = "amps";
+/// Hardcoded Tier 1 measurements.
+const TARGETS: &[Target] = &[
+    Target {
+        device_id: "meter_01",
+        measurement: "kwh_delivered",
+        unit: "watt_hours",
+    },
+    Target {
+        device_id: "pdu_01",
+        measurement: "input_current",
+        unit: "amps",
+    },
+];
 
-/// Tier 1 flow: read both devices, publish each to MQTT, exit.
+/// Tier 1 flow: read every target, publish each to MQTT, exit.
 pub async fn run(cfg: Config) -> Result<()> {
     info!(
         device_api_url = %cfg.device_api_url,
@@ -38,68 +49,49 @@ pub async fn run(cfg: Config) -> Result<()> {
     let spec = fetch_asyncapi(&cfg.device_api_url).await?;
     info!(version = %spec.info.version, "spec fetched");
 
-    read_and_publish_modbus(&spec, &cfg, &client).await?;
-    read_and_publish_snmp(&spec, &cfg, &client).await?;
+    for target in TARGETS {
+        read_and_publish(&spec, &cfg, &client, target).await?;
+    }
 
     client.disconnect(None).await.context("mqtt disconnect")?;
     Ok(())
 }
 
-/// Read meter_01.kwh_delivered (Modbus) and publish as a FloatSample.
-async fn read_and_publish_modbus(
+/// Look up a binding, dispatch to the right protocol client, publish.
+async fn read_and_publish(
     spec: &AsyncApiSpec,
     cfg: &Config,
     client: &paho_mqtt::AsyncClient,
+    target: &Target,
 ) -> Result<()> {
     let binding = spec
         .x_protocol_source
-        .get(MODBUS_DEVICE_ID)
-        .and_then(|m| m.get(MODBUS_MEASUREMENT))
-        .context("x-protocol-source missing meter_01.kwh_delivered")?;
-    let ProtocolBinding::ModbusTcp(b) = binding else {
-        anyhow::bail!("expected Modbus binding for meter_01.kwh_delivered");
-    };
-    let unit_id: u8 = b
-        .unit_id
-        .parse()
-        .context("unit_id must parse to u8 for Modbus")?;
-    let words = read_holding(&b.host, b.port, unit_id, b.address, 2).await?;
-    let raw = decode_int32(&words, WordOrder::HighLow);
-    let value = apply_scale_offset(raw, b.scale, b.offset);
-    info!(raw, value, "modbus read complete");
+        .get(target.device_id)
+        .and_then(|m| m.get(target.measurement))
+        .with_context(|| {
+            format!(
+                "x-protocol-source missing {}.{}",
+                target.device_id, target.measurement
+            )
+        })?;
+
+    let value = read_value(binding).await?;
+    info!(target.device_id, target.measurement, value, "read complete");
 
     let topic = format!(
         "sites/{}/devices/{}/measurements/{}/{}",
-        cfg.site_id, MODBUS_DEVICE_ID, MODBUS_MEASUREMENT, MODBUS_UNIT,
+        cfg.site_id, target.device_id, target.measurement, target.unit,
     );
     publisher::publish_measurement(client, &topic, value).await?;
-    info!(%topic, "modbus published");
+    info!(%topic, "published");
     Ok(())
 }
 
-/// Read pdu_01.input_current (SNMP) and publish as a FloatSample.
-async fn read_and_publish_snmp(
-    spec: &AsyncApiSpec,
-    cfg: &Config,
-    client: &paho_mqtt::AsyncClient,
-) -> Result<()> {
-    let binding = spec
-        .x_protocol_source
-        .get(SNMP_DEVICE_ID)
-        .and_then(|m| m.get(SNMP_MEASUREMENT))
-        .context("x-protocol-source missing pdu_01.input_current")?;
-    let ProtocolBinding::Snmp(b) = binding else {
-        anyhow::bail!("expected SNMP binding for pdu_01.input_current");
-    };
-    let raw = read_integer(&b.host, b.port, &b.oid).await?;
-    let value = raw as f64;
-    info!(raw, value, "snmp read complete");
-
-    let topic = format!(
-        "sites/{}/devices/{}/measurements/{}/{}",
-        cfg.site_id, SNMP_DEVICE_ID, SNMP_MEASUREMENT, SNMP_UNIT,
-    );
-    publisher::publish_measurement(client, &topic, value).await?;
-    info!(%topic, "snmp published");
-    Ok(())
+/// Single-point protocol dispatch. Add a `match` arm when a new
+/// `ProtocolBinding` variant lands.
+async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
+    match binding {
+        ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b).await,
+        ProtocolBinding::Snmp(b) => snmp::read_measurement(b).await,
+    }
 }

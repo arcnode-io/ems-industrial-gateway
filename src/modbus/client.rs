@@ -1,5 +1,6 @@
 //! Modbus TCP client + decode helpers.
 
+use crate::asyncapi::types::ModbusTcpBinding;
 use anyhow::{Context, Result};
 use rodbus::client::{HostAddr, RequestParam, spawn_tcp_client_task};
 use rodbus::{AddressRange, UnitId};
@@ -11,6 +12,18 @@ use tracing::warn;
 /// reconnect in the background and the first read can race with the initial
 /// TCP handshake.
 const MAX_READ_ATTEMPTS: u32 = 5;
+
+/// Full read pipeline for a Modbus measurement: connect → read 2 holding
+/// registers → decode int32 high_low → apply scale/offset.
+pub async fn read_measurement(b: &ModbusTcpBinding) -> Result<f64> {
+    let unit_id: u8 = b
+        .unit_id
+        .parse()
+        .context("unit_id must parse to u8 for Modbus")?;
+    let words = read_holding(&b.host, b.port, unit_id, b.address, 2).await?;
+    let raw = decode_int32(&words, WordOrder::HighLow);
+    Ok(apply_scale_offset(raw, b.scale, b.offset))
+}
 
 /// Word order for multi-register integer decoding.
 #[derive(Debug, Clone, Copy)]

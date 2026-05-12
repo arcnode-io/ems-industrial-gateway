@@ -1,5 +1,6 @@
 //! SNMP v2c client wrapping `csnmp::Snmp2cClient`.
 
+use crate::asyncapi::types::SnmpBinding;
 use anyhow::{Context, Result};
 use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient};
 use std::net::SocketAddr;
@@ -7,6 +8,12 @@ use std::time::Duration;
 use tokio::net::lookup_host;
 use tokio::time::sleep;
 use tracing::warn;
+
+/// Full read pipeline for an SNMP measurement: resolve → GET → cast to f64.
+pub async fn read_measurement(b: &SnmpBinding) -> Result<f64> {
+    let raw = read_integer(&b.host, b.port, &b.oid).await?;
+    Ok(raw as f64)
+}
 
 /// Default community for SNMP v2c reads. Industrial gear typically allows
 /// "public" for read-only access. Override via cfg in the future when

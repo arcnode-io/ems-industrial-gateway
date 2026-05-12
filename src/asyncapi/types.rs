@@ -2,7 +2,8 @@
 //!
 //! Gateway only consumes a narrow slice (x-protocol-source bindings). When the
 //! spec shape changes, update these structs — the compiler tells you where to
-//! look. `Validate` enforces business rules at parse time.
+//! look. `Validate` is used only on the top-level metadata block; per-binding
+//! fields are enforced at parse time by serde's typed deserialization.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -43,16 +44,14 @@ pub enum ProtocolBinding {
 
 /// Modbus TCP binding fields (template + device.connection merged in
 /// device-api's `x-protocol-source` extension).
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize)]
 pub struct ModbusTcpBinding {
     /// Target host (IP or DNS) for the protocol connection.
-    #[validate(length(min = 1))]
     pub host: String,
     /// TCP port for the protocol connection.
-    #[validate(range(min = 1, max = 65535))]
     pub port: u16,
-    /// Modbus unit id (slave id). String in DTM to allow non-numeric IDs for
-    /// non-Modbus protocols; gateway parses to u8 at the Modbus call site.
+    /// Modbus unit id (slave id). Stored as string in the DTM; parsed to u8
+    /// at the Modbus call site.
     pub unit_id: String,
     /// Starting register address.
     pub address: u16,
@@ -63,15 +62,12 @@ pub struct ModbusTcpBinding {
 }
 
 /// SNMP v2c binding fields.
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize)]
 pub struct SnmpBinding {
     /// Target host (IP or DNS) for the SNMP agent.
-    #[validate(length(min = 1))]
     pub host: String,
     /// UDP port for the SNMP agent (default 161).
-    #[validate(range(min = 1, max = 65535))]
     pub port: u16,
     /// Object identifier in dotted-numeric form, e.g. "1.3.6.1.4.1.41999.1.1.0".
-    #[validate(length(min = 1))]
     pub oid: String,
 }
