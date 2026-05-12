@@ -50,6 +50,17 @@
         "unit_id": null
       },
       "blocking": []
+    },
+    "cooler_01": {
+      "device_id": "cooler_01",
+      "template": "dc_external",
+      "parent": null,
+      "connection": {
+        "host": "<replaced-at-test-time>",
+        "port": 47808,
+        "unit_id": null
+      },
+      "blocking": []
     }
   },
   "buses": [],
@@ -133,6 +144,28 @@
             "protocol": "dnp3_tcp",
             "point_index": 0,
             "point_type": "analog_input"
+          }
+        }
+      }
+    },
+    "dc_external": {
+      "template": "dc_external",
+      "kind": "leaf",
+      "equipment_id": "EXT-DC-001",
+      "vendor": "Güntner",
+      "model": "GFD V-shape",
+      "description": "Güntner GFD V-shape dry cooler with BACnet/IP telemetry (router-fronted MS-TP in production)",
+      "measurements": {
+        "supply_water_temp": {
+          "unit": "celsius",
+          "type": "float",
+          "poll_rate_hz": 0.5,
+          "binding": {
+            "protocol": "bacnet_ip",
+            "device_instance": 11001,
+            "object_type": "analog_input",
+            "object_instance": 1,
+            "property_id": "present_value"
           }
         }
       }

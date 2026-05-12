@@ -46,6 +46,11 @@ pub enum ProtocolBinding {
     /// DNP3 over TCP binding.
     #[serde(rename = "dnp3_tcp")]
     Dnp3Tcp(Dnp3TcpBinding),
+    /// BACnet/IP binding. Used for devices fronted by a BACnet/IP↔MS-TP
+    /// router; the on-device protocol may be MS-TP but the gateway only
+    /// sees BACnet/IP UDP.
+    #[serde(rename = "bacnet_ip")]
+    BacnetIp(BacnetIpBinding),
 }
 
 /// Modbus TCP binding fields (template + device.connection merged in
@@ -91,6 +96,23 @@ pub struct RedfishBinding {
     /// JSON Pointer (RFC 6901) into the response body, e.g.
     /// "/Temperatures/0/ReadingCelsius". Null means the response IS the value.
     pub json_pointer: Option<String>,
+}
+
+/// BACnet/IP (ASHRAE 135 Annex J) binding fields.
+#[derive(Debug, Deserialize)]
+pub struct BacnetIpBinding {
+    /// Target host (IP or DNS) for the BACnet/IP endpoint (router or device).
+    pub host: String,
+    /// UDP port (default 47808 per Annex J).
+    pub port: u16,
+    /// Device instance number on the target.
+    pub device_instance: u32,
+    /// Object type to read; Tier 1 supports `analog_input` only.
+    pub object_type: String,
+    /// Object instance number on the target.
+    pub object_instance: u32,
+    /// Property to read; Tier 1 supports `present_value` only.
+    pub property_id: String,
 }
 
 /// DNP3 TCP binding fields.

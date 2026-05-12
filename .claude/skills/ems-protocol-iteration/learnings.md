@@ -197,3 +197,66 @@ server.bind().await?; // returns ServerHandle; spawn the await in a task or it b
 - The `dnp3` crate's API surface is deep across many modules. Before writing any client code, read `master/examples/master.rs` AND `outstation/examples/outstation.rs` from the crate — they show the imports needed and the wiring shape. Saves an hour of "unresolved import" whack-a-mole.
 - `ControlHandler` is unavoidable on the outstation side even for read-only mocks. Plan to write the `reject_control!` macro on day one.
 - `Variation` is publicly at `dnp3::app::Variation`, not `dnp3::master::Variation`. Look for re-exports before reaching for absolute private paths.
+
+---
+
+## BACnet/IP (2026-05-12)
+
+**Library:** `bacnet-rs 0.3.0` (Apr 2026, 7.6K monthly DLs). Rust-native, marked "not yet production-ready" but the encode/decode primitives are solid. Has a high-level `BacnetClient` but it only does `ReadPropertyMultiple` (RPM) — for single `ReadProperty` (RP) reads, you have to wire the UDP socket yourself.
+
+**Transport decision:** BACnet/IP only (port 47808 UDP, BVLC + NPDU + APDU framing). The on-device protocol may be MS-TP over RS-485 (e.g., Güntner GFD, EVAPCO chiller) but production deployments put a BACnet/IP↔MS-TP router (Loytec, Easy/IO, ABB) in front. Gateway only ever sees BACnet/IP. DTM template binding uses `protocol: bacnet_ip` for the same reason — discriminator describes the gateway's wire format, not the device's wire format.
+
+**Library API map (saves an hour of import hunting):**
+- `bacnet_rs::app::Apdu` — APDU enum with `ConfirmedRequest`/`ComplexAck`/`Error`/etc. variants. `Apdu::decode(&bytes)` returns `Apdu` (NOT a tuple — DNP3-style `(value, consumed)` not used here). `Apdu::encode(&self) -> Vec<u8>`.
+- `bacnet_rs::app::{MaxApduSize, MaxSegments}` — enums for the confirmed-request header.
+- `bacnet_rs::network::Npdu` — `Npdu::decode(&bytes)` returns `(Npdu, usize)` (npdu, consumed).
+- `bacnet_rs::object::{ObjectIdentifier, ObjectType, PropertyIdentifier}` — the binding's "what to read" types. `ObjectIdentifier::new(ObjectType::AnalogInput, instance: u32)`.
+- `bacnet_rs::property::PropertyValue` — pattern-match the response. `Real(f32)` is the common AnalogInput payload.
+- `bacnet_rs::service::{ReadPropertyRequest, ReadPropertyResponse, ConfirmedServiceChoice, UnconfirmedServiceChoice, WhoIsRequest, IAmRequest}` — RP encode/decode lives here.
+
+**BVLC frame format (Annex J):** 4-byte header — `0x81` (BACnet/IP type), function byte (`0x0A` Original-Unicast-NPDU / `0x0B` Original-Broadcast-NPDU), 2-byte big-endian total length INCLUDING the 4-byte header itself. Followed by encoded NPDU + APDU.
+
+**Responder loop shape (fixture side):**
+```rust
+// Decode flow:
+let (_npdu, npdu_len) = Npdu::decode(&frame[4..])?;
+let apdu = Apdu::decode(&frame[4 + npdu_len..])?; // <- not a tuple
+match apdu {
+    Apdu::UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::WhoIs,
+        service_data,
+    } => /* respond with I-Am */,
+    Apdu::ConfirmedRequest {
+        invoke_id,
+        service_choice: ConfirmedServiceChoice::ReadProperty,
+        service_data,
+        ..
+    } => /* decode ReadPropertyRequest, lookup, build ComplexAck */,
+    _ => /* drop */,
+}
+```
+Note the variant-binding-style pattern — clippy `redundant_guards` requires `service_choice: ConfirmedServiceChoice::ReadProperty` inline, not as a `match` guard.
+
+**IPv4/IPv6 address-family gotcha:** `tokio::net::UdpSocket::bind("0.0.0.0:0")` then `send_to(&frame, "localhost:NNN")` fails with `EAFNOSUPPORT (os error 97)` on Linux if `localhost` resolves to `::1` first. Fix: `lookup_host()` to get a concrete `SocketAddr`, then bind `0.0.0.0:0` if `target.is_ipv4()` else `[::]:0`. SNMP's `csnmp` crate dodges this internally; our hand-rolled UDP doesn't.
+
+**device-api schema + catalog dance (cost an integration round-trip):**
+1. `template.protocols.schema.ts` must have a `BacnetIpBinding` strictObject variant in the discriminated union. Without it, POST /topology returns 400 with `discriminator: "protocol"` validation error.
+2. `templates_used` slugs are also validated against the **bundled catalog** (`device_templates/` symlinked from edp-api). New template slug = add to catalog. For the integration test, reuse an existing slug (`dc_external`) instead of inventing one (`dry_cooler`).
+
+**Schema gotchas:**
+- `BacnetIpBinding`: `{ protocol: "bacnet_ip", device_instance: u32, object_type: enum, object_instance: u32, property_id: enum }`. No host/port in the binding itself — those merge in from `device.connection` via spec-extensions, same pattern as Modbus/SNMP.
+- `device_instance` is an addressing concept inside a BACnet network (not a TCP/UDP port). Multiple devices can share one IP via the BACnet router.
+- Tier 1 caps `object_type` to `analog_input` and `property_id` to `present_value` — gateway client errors on anything else.
+
+**Test gotchas:**
+- `start_mock_bacnet_device` exposes `ContainerPort::Udp(47808)`. Standard pattern but watch for IPv4/IPv6 (see above).
+- 8-container test now: postgres, emqx, device-api, modbus, snmp, redfish, dnp3, bacnet. The 5 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only postgres/emqx/device-api need the network.
+
+**Retry/handshake:** UDP — no handshake to race. First read usually succeeds. Kept the 5-attempt `500ms * 2^n` retry from the other protocols for parity, plus a per-attempt 800ms `recv_from` timeout so the gateway doesn't hang forever.
+
+**ProtocolBinding enum still paying off:** Adding BACnet was exactly 3 changes on the gateway side again: new enum variant `BacnetIp(BacnetIpBinding)`, new module `src/bacnet/{mod,client}.rs`, one `match` arm + one `TARGETS` entry in `app.rs`. Five protocols in, no app surgery.
+
+**What I wish I'd known before starting BACnet/IP:**
+- The library is more "primitives" than "framework." `BacnetClient` is a thin convenience over the encode/decode pairs. For tier-1 single-property reads, skip `BacnetClient` and drive the UDP socket directly — fewer assumptions, less surprise.
+- Don't trust `0.0.0.0:0` ephemeral binding alone. Match the address family of the resolved target. Linux is picky about `EAFNOSUPPORT` in a way OS X isn't.
+- The device-api zod schema is the gating layer for any DTM POST. Update `template.protocols.schema.ts` BEFORE touching the integration test or you'll burn a build cycle on a 400.

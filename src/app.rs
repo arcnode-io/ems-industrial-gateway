@@ -1,6 +1,7 @@
 //! Boot orchestration. Tier 1: one-shot fetch → per-device protocol read → MQTT publish → exit.
 
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding};
+use crate::bacnet::client as bacnet;
 use crate::config::Config;
 use crate::dnp3::client as dnp3;
 use crate::http::client::fetch_asyncapi;
@@ -43,6 +44,11 @@ const TARGETS: &[Target] = &[
         device_id: "relay_01",
         measurement: "phase_a_current",
         unit: "amps",
+    },
+    Target {
+        device_id: "cooler_01",
+        measurement: "supply_water_temp",
+        unit: "celsius",
     },
 ];
 
@@ -107,5 +113,6 @@ async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
         ProtocolBinding::Snmp(b) => snmp::read_measurement(b).await,
         ProtocolBinding::Redfish(b) => redfish::read_measurement(b).await,
         ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b).await,
+        ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b).await,
     }
 }

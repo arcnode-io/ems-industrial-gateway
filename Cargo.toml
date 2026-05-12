@@ -13,6 +13,7 @@ missing_docs = "warn"
 [dependencies]
 rodbus = "1.4"
 dnp3 = "1.6"
+bacnet-rs = { version = "0.3", default-features = false, features = ["std"] }
 csnmp = "0.6"
 paho-mqtt = "0.13"
 reqwest = { version = "0.12", features = ["json"] }

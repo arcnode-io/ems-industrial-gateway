@@ -82,6 +82,17 @@ pub async fn start_mock_dnp3_outstation() -> anyhow::Result<ContainerAsync<Gener
     Ok(c)
 }
 
+/// Spin up mock-bacnet-device. UDP 47808 mapped; gateway reaches it via
+/// host port. Not on the shared Docker network.
+pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("173.211.12.43:8083/library/mock-bacnet-device", "latest")
+        .with_exposed_port(ContainerPort::Udp(47808))
+        .with_wait_for(WaitFor::message_on_stdout("mock-bacnet-device listening"))
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
 /// `emqx` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {
