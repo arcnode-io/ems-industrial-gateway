@@ -1,11 +1,16 @@
 ---
 name: ems-protocol-iteration
-description: Use when adding a new south-side grid protocol (Modbus / SNMP / DNP3 / Redfish / CANopen / BACnet / OCPP) to the ARCNODE EMS stack — covers fixture, gateway client, schema, and e2e in one recipe. Reads/updates `learnings.md` to compound gotchas across protocols.
+description: Use when adding a new south-side grid protocol (Modbus TCP / Modbus RTU / SNMP / DNP3 / Redfish / BACnet MS-TP / OCPP) to the ARCNODE EMS stack — covers fixture, gateway client, schema, and e2e in one recipe. Reads/updates `learnings.md` to compound gotchas across protocols.
 ---
 
 # EMS Protocol Iteration
 
-For each new south-side protocol N (Modbus done, SNMP/DNP3/Redfish/CANopen pending), execute the 6 phases below. Read `learnings.md` BEFORE Phase 1 — it captures gotchas from prior rounds that this round must respect.
+For each new south-side protocol N, execute the 6 phases below. Read `learnings.md` BEFORE Phase 1 — it captures gotchas from prior rounds that this round must respect.
+
+**Status (from edp-module-assemblies equipment scope):**
+- ✅ Done: Modbus TCP, SNMP v2c, Redfish, DNP3 TCP
+- ⏳ Pending: BACnet MS-TP (EXT-DC-001, EXT-DC-002 cooling), Modbus RTU (GRD-XFM-001 transformer thermometer)
+- ❌ Dead: CANopen — EXT-BESS-002 (CATL) exposes Modbus TCP via MBMU ETH/RJ45; no CAN integration needed
 
 **Announce at start:** "I'm using the ems-protocol-iteration skill to add <PROTOCOL>."
 

@@ -106,7 +106,7 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 - Test now spins up 6 containers (`postgres`, `emqx`, `device-api`, `mock-modbus-server`, `mock-snmp-agent`, `mock-redfish-service`). The 3 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only `postgres`/`emqx`/`device-api` need the network (device-api's beta cfg resolves `postgres` + `emqx` by name).
 - `network_switch` template's measurements have `poll_rate_hz` between 0.1 and 1 — for Tier 1 hardcoded one-shot reads, the rate is irrelevant. Won't matter until Tier 2's continuous-poll loop.
 
-**Dockerfile gotcha:** Same workspace-stub trick from earlier protocols. The stub list now includes all four siblings (`mock-modbus-server`, `mock-snmp-agent`, `mock-dnp3-outstation`, `mock-canbus-node`). When adding the NEXT fixture, update its Dockerfile's sibling list accordingly.
+**Dockerfile gotcha:** Same workspace-stub trick from earlier protocols. When adding the NEXT fixture, update its Dockerfile's sibling list to include every existing fixture crate (so cargo can resolve the workspace cleanly).
 
 **ProtocolBinding enum pays off:** Adding Redfish was three changes total to the gateway side:
 1. New enum variant `Redfish(RedfishBinding)` in `src/asyncapi/types.rs`
