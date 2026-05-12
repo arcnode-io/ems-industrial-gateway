@@ -85,3 +85,37 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 - ContainerPort::Udp for both `with_exposed_port` AND `get_host_port_ipv4`.
 - CI runners can leave stale named containers; `before_script` cleanup is mandatory for network-pinned fixtures.
 - The PDU template `~/arcnode/edp-api/device_templates/leaf/pdu.yaml` is the canonical SNMP test template (Server Tech 1718 enterprise). Mirror its OIDs in the fixture rather than inventing.
+
+---
+
+## Redfish (2026-05-12)
+
+**Libraries:** `reqwest 0.12` (gateway client — already a dep) + `axum 0.8.9` (fixture server). Both standard, both Just Work. The simplest protocol round so far.
+
+**Library API quirks:**
+- `axum 0.8` `Router::new().route("/path", get(handler))` + `axum::Json<Value>` return type for JSON responses. Pretty boring.
+- `serde_json::Value::pointer(&str)` returns `Option<&Value>` per RFC 6901. JSON Pointer paths start with `/`, segments separated by `/`. Drilling `/Temperatures/0/ReadingCelsius` into our Thermal response gives the inlet temp.
+
+**Schema gotchas:**
+- DTM `RedfishBinding` (`template.protocols.schema.ts`): `{ protocol: "redfish", uri: string, json_pointer: string|null }`. Connection block adds host/port via the spec-extensions merge — same pattern as Modbus + SNMP.
+- `json_pointer` is nullable in the template — gateway treats `None` as "the entire response body is the value." Tier 1 uses pointer everywhere; nullable case is future-proofing.
+- Template URIs are relative to `/redfish/v1` (the Redfish spec service root). Gateway prepends `/redfish/v1` when building the full URL. **Don't** put the prefix in the DTM.
+
+**Test gotchas:**
+- `start_mock_redfish_service` exposes plain `ContainerPort::Tcp(8443)` (no UDP/special). Default behavior works.
+- Test now spins up 6 containers (`postgres`, `emqx`, `device-api`, `mock-modbus-server`, `mock-snmp-agent`, `mock-redfish-service`). The 3 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only `postgres`/`emqx`/`device-api` need the network (device-api's beta cfg resolves `postgres` + `emqx` by name).
+- `network_switch` template's measurements have `poll_rate_hz` between 0.1 and 1 — for Tier 1 hardcoded one-shot reads, the rate is irrelevant. Won't matter until Tier 2's continuous-poll loop.
+
+**Dockerfile gotcha:** Same workspace-stub trick from earlier protocols. The stub list now includes all four siblings (`mock-modbus-server`, `mock-snmp-agent`, `mock-dnp3-outstation`, `mock-canbus-node`). When adding the NEXT fixture, update its Dockerfile's sibling list accordingly.
+
+**ProtocolBinding enum pays off:** Adding Redfish was three changes total to the gateway side:
+1. New enum variant `Redfish(RedfishBinding)` in `src/asyncapi/types.rs`
+2. New module `src/redfish/{mod,client}.rs` with `read_measurement(b: &RedfishBinding) -> Result<f64>`
+3. One `match` arm in `read_value` in `app.rs` + one entry in `TARGETS`
+
+No app.rs surgery, no copy-paste. The trait extraction from the SNMP→Redfish gap proved its worth.
+
+**What I wish I'd known before starting Redfish:**
+- Redfish URIs in templates are relative to `/redfish/v1`. Gateway client owns the prefix.
+- axum 0.8's `axum::Json<Value>` + `serde_json::json!()` macro = trivial fixture handlers. Don't over-engineer with custom serializers.
+- For first-time-only-protocol cases, a "skin" test that just GETs the fixture's URL with `curl` during smoke validation can catch shape mistakes before testcontainers boot.
