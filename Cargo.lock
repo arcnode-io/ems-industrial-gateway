@@ -609,6 +609,7 @@ dependencies = [
  "serde_yaml",
  "testcontainers",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "validator",

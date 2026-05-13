@@ -1,6 +1,9 @@
-//! Binary entry: load cfg, init tracing, run the gateway one-shot.
+//! Binary entry: load cfg, init tracing, run the gateway until SIGINT/SIGTERM.
 
 use ems_industrial_gateway::{app, config::load_config};
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -14,5 +17,37 @@ async fn main() -> anyhow::Result<()> {
             _ => tracing::Level::INFO,
         })
         .init();
-    app::run(cfg).await
+
+    let cancel = CancellationToken::new();
+    let signal_cancel = cancel.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        signal_cancel.cancel();
+    });
+
+    app::run(cfg, cancel).await
+}
+
+/// Wait for either SIGINT (Ctrl-C) or SIGTERM (orchestrator stop). Whichever
+/// arrives first ends the wait. Unix-only path covers SIGTERM; Ctrl-C works
+/// on all platforms.
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            sig.recv().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("SIGINT received"),
+        _ = terminate => info!("SIGTERM received"),
+    }
 }

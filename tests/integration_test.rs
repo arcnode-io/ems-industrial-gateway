@@ -1,6 +1,10 @@
 //! Integration: validate the AsyncAPI / Modbus / SNMP / Redfish / DNP3 /
 //! BACnet / MQTT contract against real testcontainers + the gateway binary.
 //! 8 testcontainers + real gateway binary in-process.
+//!
+//! Tier 2: gateway runs continuously. Test collects 3 publishes per topic and
+//! asserts (a) all values in expected sawtooth range and (b) ≥2 distinct
+//! values per topic — proving the ticker is actually advancing.
 
 mod fixtures;
 
@@ -17,9 +21,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 use testcontainers::core::ContainerPort;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+
+/// How many publishes per topic the assertion phase waits for.
+const PUBLISHES_PER_TOPIC: usize = 3;
+/// Overall timeout for the publish-collection phase.
+const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[tokio::test]
-async fn gateway_reads_five_protocols_and_publishes_to_mqtt() -> Result<()> {
+async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
     let (pg, emqx, modbus_fix, snmp_fix, redfish_fix, dnp3_fix, bacnet_fix) = tokio::try_join!(
         start_postgres(),
@@ -106,65 +116,95 @@ async fn gateway_reads_five_protocols_and_publishes_to_mqtt() -> Result<()> {
     )
     .await?;
 
-    // Act — run the gateway one-shot.
+    // Act — spawn the gateway with a cancel token so the test owns lifecycle.
     let cfg = Config {
         device_api_url,
         broker_url: broker_url.clone(),
         site_id: "site_001".to_string(),
         log_level: "info".to_string(),
     };
-    app::run(cfg).await?;
+    let cancel = CancellationToken::new();
+    let gateway_handle = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move { app::run(cfg, cancel).await })
+    };
 
-    // Assert — collect all five publishes within 10s, verify each value's range.
-    let mut received: HashMap<String, f64> = HashMap::new();
-    while received.len() < 5 {
-        let msg = timeout(Duration::from_secs(10), stream.next())
-            .await?
-            .flatten()
-            .expect("expected MQTT message");
+    // Assert — collect 3 publishes per topic. With sawtooth fixtures at
+    // poll_rate_hz ≥ 0.1, this lands in well under 30s.
+    let topics: [(&str, std::ops::RangeInclusive<f64>); 5] = [
+        (
+            "sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours",
+            1_000_000.0..=1_010_000.0,
+        ),
+        (
+            "sites/site_001/devices/pdu_01/measurements/input_current/amps",
+            100.0..=200.0,
+        ),
+        (
+            "sites/site_001/devices/switch_01/measurements/inlet_temp/celsius",
+            20.0..=30.0,
+        ),
+        (
+            "sites/site_001/devices/relay_01/measurements/phase_a_current/amps",
+            100.0..=200.0,
+        ),
+        (
+            "sites/site_001/devices/cooler_01/measurements/supply_water_temp/celsius",
+            7.0..=15.0,
+        ),
+    ];
+
+    let mut samples: HashMap<String, Vec<f64>> = HashMap::new();
+    let deadline = tokio::time::Instant::now() + COLLECTION_TIMEOUT;
+    loop {
+        if topics
+            .iter()
+            .all(|(t, _)| samples.get(*t).map(Vec::len).unwrap_or(0) >= PUBLISHES_PER_TOPIC)
+        {
+            break;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            panic!(
+                "timed out waiting for {PUBLISHES_PER_TOPIC} publishes per topic; got {samples:?}"
+            );
+        }
+        let msg_opt = timeout(deadline - now, stream.next()).await?.flatten();
+        let msg = msg_opt.expect("expected MQTT message");
         let payload: Value = serde_json::from_slice(msg.payload())?;
-        received.insert(msg.topic().to_string(), payload["value"].as_f64().unwrap());
+        let value = payload["value"].as_f64().expect("non-numeric payload");
+        samples
+            .entry(msg.topic().to_string())
+            .or_default()
+            .push(value);
     }
 
-    let kwh = received
-        .get("sites/site_001/devices/meter_01/measurements/kwh_delivered/watt_hours")
-        .expect("modbus publish missing");
-    assert!(
-        (1_000_000.0..=1_010_000.0).contains(kwh),
-        "kwh_delivered {kwh} outside expected sawtooth range [1_000_000, 1_010_000]",
-    );
+    cancel.cancel();
+    gateway_handle.await??;
 
-    let amps = received
-        .get("sites/site_001/devices/pdu_01/measurements/input_current/amps")
-        .expect("snmp publish missing");
-    assert!(
-        (100.0..=200.0).contains(amps),
-        "input_current {amps} outside expected sawtooth range [100, 200]",
-    );
-
-    let inlet = received
-        .get("sites/site_001/devices/switch_01/measurements/inlet_temp/celsius")
-        .expect("redfish publish missing");
-    assert!(
-        (20.0..=30.0).contains(inlet),
-        "inlet_temp {inlet} outside expected sawtooth range [20, 30]",
-    );
-
-    let phase_a = received
-        .get("sites/site_001/devices/relay_01/measurements/phase_a_current/amps")
-        .expect("dnp3 publish missing");
-    assert!(
-        (100.0..=200.0).contains(phase_a),
-        "phase_a_current {phase_a} outside expected sawtooth range [100, 200]",
-    );
-
-    let supply = received
-        .get("sites/site_001/devices/cooler_01/measurements/supply_water_temp/celsius")
-        .expect("bacnet publish missing");
-    assert!(
-        (7.0..=15.0).contains(supply),
-        "supply_water_temp {supply} outside expected sawtooth range [7, 15]",
-    );
+    // Verify every topic: range on first sample + ≥2 distinct values (proving
+    // the per-measurement ticker actually advanced).
+    for (topic, range) in &topics {
+        let series = samples
+            .get(*topic)
+            .unwrap_or_else(|| panic!("no samples for {topic}"));
+        assert!(
+            series.len() >= PUBLISHES_PER_TOPIC,
+            "expected {PUBLISHES_PER_TOPIC} samples on {topic}, got {}",
+            series.len(),
+        );
+        let first = series[0];
+        assert!(
+            range.contains(&first),
+            "{topic} first value {first} outside expected range {range:?}",
+        );
+        let distinct: std::collections::HashSet<u64> = series.iter().map(|v| v.to_bits()).collect();
+        assert!(
+            distinct.len() >= 2,
+            "{topic} produced no distinct values across {} samples — ticker stalled? {series:?}",
+            series.len(),
+        );
+    }
 
     Ok(())
 }

@@ -16,9 +16,24 @@ pub struct AsyncApiSpec {
     /// Spec metadata block (carries `version` for cache-keying).
     #[validate(nested)]
     pub info: SpecInfo,
-    /// Per-device, per-measurement protocol bindings.
+    /// Per-device, per-measurement protocol bindings + channel meta.
     #[serde(rename = "x-protocol-source")]
-    pub x_protocol_source: HashMap<String, HashMap<String, ProtocolBinding>>,
+    pub x_protocol_source: HashMap<String, HashMap<String, ProtocolSource>>,
+}
+
+/// One x-protocol-source entry: a protocol binding plus the channel-level
+/// meta the gateway needs to drive the loop (`unit` for MQTT topic suffix,
+/// `poll_rate_hz` for tick cadence).
+#[derive(Debug, Deserialize)]
+pub struct ProtocolSource {
+    /// Engineering unit terminal segment for the MQTT topic.
+    pub unit: String,
+    /// Poll cadence per measurement; `None` means the DTM author omitted it
+    /// and the gateway should apply its default (see `app.rs`).
+    pub poll_rate_hz: Option<f64>,
+    /// The protocol binding itself; variant discriminated by `protocol`.
+    #[serde(flatten)]
+    pub binding: ProtocolBinding,
 }
 
 /// AsyncAPI info block.
