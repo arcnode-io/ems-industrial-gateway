@@ -102,7 +102,10 @@ pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> 
             "Nest application successfully started",
         ))
         .with_env_var("ENV", "beta")
-        .with_env_var("POSTGRES_PASSWORD", "test")
+        .with_env_var(
+            "DOCUMENT_URL",
+            "postgres://postgres:test@postgres:5432/postgres",
+        )
         .with_network(NETWORK)
         .start()
         .await?;
