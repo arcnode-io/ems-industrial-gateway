@@ -1,5 +1,6 @@
 stages:
   - check
+  - publish
   - mirror
 
 check:
@@ -23,6 +24,15 @@ check:
       coverage_report:
         coverage_format: cobertura
         path: cobertura.xml
+
+build:
+  stage: publish
+  script:
+    - aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+    - docker build -t public.ecr.aws/y1d2j6a8/ems-industrial-gateway .
+    - docker push public.ecr.aws/y1d2j6a8/ems-industrial-gateway
+  only:
+    - main
 
 mirror:
   stage: mirror
