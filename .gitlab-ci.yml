@@ -9,9 +9,12 @@ check:
     # Clear stale containers + network from prior failed runs. testcontainers
     # cleans up on Drop, but a killed process can leave behind named containers
     # (postgres / hivemq / device-api are network-pinned for device-api beta cfg).
+    # Use `docker ps -a` not the default `docker ps` — failed testcontainer
+    # runs leave the container in `Created` state (not Running), which still
+    # reserves the port mapping. `Created` containers don't show up without -a.
     - docker rm -f postgres emqx hivemq device-api 2>/dev/null || true
-    - docker ps -q --filter publish=1883 | xargs -r docker rm -f
-    - docker ps -q --filter "ancestor=hivemq/hivemq-ce" | xargs -r docker rm -f
+    - docker ps -aq --filter "ancestor=hivemq/hivemq-ce" | xargs -r docker rm -f
+    - docker ps -aq --filter "ancestor=emqx/emqx" | xargs -r docker rm -f
     - docker network rm gateway-e2e 2>/dev/null || true
   script:
     - cargo cmd checks
