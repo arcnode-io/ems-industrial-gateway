@@ -28,12 +28,19 @@ pub async fn start_postgres() -> anyhow::Result<ContainerAsync<GenericImage>> {
 }
 
 /// Spin up hivemq on the shared network with hostname `hivemq`.
+///
+/// Uses `with_mapped_port(0, ...)` (single OS-assigned host binding)
+/// rather than `with_exposed_port` because the latter triggers
+/// testcontainers-rs's `publish_all_ports = true` branch — docker `-P`
+/// mode publishes EVERY image-EXPOSE port (HiveMQ exposes 1883/8000/
+/// 8083/8443/8883), multiplying collision odds on a busy CI runner
+/// (e.g. Harbor on 8083).
 pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("hivemq/hivemq-ce", "latest")
-        .with_exposed_port(ContainerPort::Tcp(1883))
         .with_wait_for(WaitFor::message_on_stdout(
             "Started TCP Listener on address 0.0.0.0 and on port 1883.",
         ))
+        .with_mapped_port(0, ContainerPort::Tcp(1883))
         .with_network(NETWORK)
         .with_container_name("hivemq")
         .start()
