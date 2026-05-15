@@ -11,7 +11,7 @@ mod fixtures;
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
 use fixtures::containers::{
-    start_device_api, start_emqx, start_mock_bacnet_device, start_mock_dnp3_outstation,
+    start_device_api, start_hivemq, start_mock_bacnet_device, start_mock_dnp3_outstation,
     start_mock_modbus_server, start_mock_redfish_service, start_mock_snmp_agent, start_postgres,
 };
 use futures::StreamExt;
@@ -31,17 +31,17 @@ const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 #[tokio::test]
 async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Result<()> {
     // Arrange — spin up testcontainers in parallel
-    let (pg, emqx, modbus_fix, snmp_fix, redfish_fix, dnp3_fix, bacnet_fix) = tokio::try_join!(
+    let (pg, hivemq, modbus_fix, snmp_fix, redfish_fix, dnp3_fix, bacnet_fix) = tokio::try_join!(
         start_postgres(),
-        start_emqx(),
+        start_hivemq(),
         start_mock_modbus_server(),
         start_mock_snmp_agent(),
         start_mock_redfish_service(),
         start_mock_dnp3_outstation(),
         start_mock_bacnet_device(),
     )?;
-    let _ = (&pg, &emqx);
-    let emqx_port = emqx.get_host_port_ipv4(1883).await?;
+    let _ = (&pg, &hivemq);
+    let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let modbus_host = modbus_fix.get_host().await?;
     let modbus_port = modbus_fix.get_host_port_ipv4(502).await?;
     let snmp_host = snmp_fix.get_host().await?;
@@ -95,7 +95,7 @@ async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Re
     }
 
     // Subscribe to both expected topics.
-    let broker_url = format!("tcp://localhost:{emqx_port}");
+    let broker_url = format!("tcp://localhost:{hivemq_port}");
     let create_opts = CreateOptionsBuilder::new()
         .server_uri(&broker_url)
         .client_id("e2e-test-subscriber")

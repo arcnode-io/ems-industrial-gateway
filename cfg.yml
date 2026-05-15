@@ -6,6 +6,6 @@ local:
 
 beta:
   device_api_url: http://device-api:3000
-  broker_url: tcp://emqx:1883
+  broker_url: tcp://hivemq:1883
   site_id: arcnode_beta
   log_level: info

@@ -111,14 +111,14 @@ tests/
 ├── integration_test.rs  # 8 testcontainers + real gateway binary, asserts continuous behavior
 └── fixtures/
     ├── mod.rs
-    ├── containers.rs    # postgres, emqx, device-api, mock-{modbus,snmp,redfish,dnp3,bacnet}
+    ├── containers.rs    # postgres, hivemq, device-api, mock-{modbus,snmp,redfish,dnp3,bacnet}
     └── seed_dtm.json    # DTM with one device per protocol wired to its fixture
 ```
 
 ## Run locally
 
 ```bash
-# Boot device-api + emqx + the protocol fixtures separately, then:
+# Boot device-api + hivemq + the protocol fixtures separately, then:
 cargo run
 ```
 

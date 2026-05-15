@@ -10,7 +10,7 @@ use std::path::Path;
 pub struct Config {
     /// HTTP base URL for the device-api service (e.g., http://device-api:3000).
     pub device_api_url: String,
-    /// MQTT broker URL (e.g., tcp://emqx:1883).
+    /// MQTT broker URL (e.g., tcp://hivemq:1883).
     pub broker_url: String,
     /// Site identifier used in topic paths (sites/{site_id}/...).
     pub site_id: String,

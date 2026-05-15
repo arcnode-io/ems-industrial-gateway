@@ -8,8 +8,8 @@ check:
   before_script:
     # Clear stale containers + network from prior failed runs. testcontainers
     # cleans up on Drop, but a killed process can leave behind named containers
-    # (postgres / emqx / device-api are network-pinned for device-api beta cfg).
-    - docker rm -f postgres emqx device-api 2>/dev/null || true
+    # (postgres / hivemq / device-api are network-pinned for device-api beta cfg).
+    - docker rm -f postgres hivemq device-api 2>/dev/null || true
     - docker network rm gateway-e2e 2>/dev/null || true
   script:
     - cargo cmd checks

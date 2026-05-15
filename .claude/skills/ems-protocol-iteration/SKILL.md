@@ -74,7 +74,7 @@ Path: `~/arcnode/ems-industrial-gateway/src/<protocol>/`.
 
 ## Phase 5: E2E
 
-- [ ] `tests/fixtures/containers.rs`: add `start_mock_<protocol>_<role>()` pulling `173.211.12.43:8083/library/<image>:latest`. NOT on the shared Docker network (gateway reaches it via host port mapping; only postgres/emqx/device-api need the network).
+- [ ] `tests/fixtures/containers.rs`: add `start_mock_<protocol>_<role>()` pulling `173.211.12.43:8083/library/<image>:latest`. NOT on the shared Docker network (gateway reaches it via host port mapping; only postgres/hivemq/device-api need the network).
 - [ ] `tests/fixtures/seed_dtm.json`: add a device using the new protocol's template. Include `equipment_id`, `vendor`, `model` (required for kind=leaf templates). Connection block uses fixture's host:port (filled in at test time).
 - [ ] `tests/integration_test.rs`: extend the existing e2e to also assert the new protocol's measurement publishes to its expected topic + value.
 - [ ] Cargo audit ignores: if the new protocol library pulls TLS/DNS transitive deps, add the RUSTSEC IDs to `audit-packages` in `Cargo.toml`.
@@ -93,5 +93,5 @@ Path: `~/arcnode/ems-industrial-gateway/src/<protocol>/`.
 - **Don't kick-the-can.** If the right shape is cheap now (e.g., enum variant instead of one bloated struct), do it now. Migrations leave artifacts.
 - **Don't trust modelina for AsyncAPI 3.0 → Rust.** It works for bare JSON Schema, not for AsyncAPI docs. Hand-roll validated structs.
 - **Don't use GitLab Container Registry.** Project convention is Harbor at `173.211.12.43:8083/library/`.
-- **Don't put mock fixture on the device-api Docker network.** Gateway reaches the fixture via host port mapping. Only the device-api stack (postgres/emqx/device-api) needs the shared network — device-api's `beta:` cfg block hardcodes `postgres` + `emqx` hostnames.
+- **Don't put mock fixture on the device-api Docker network.** Gateway reaches the fixture via host port mapping. Only the device-api stack (postgres/hivemq/device-api) needs the shared network — device-api's `beta:` cfg block hardcodes `postgres` + `hivemq` hostnames.
 - **Don't expect the first protocol read to succeed.** Retry with backoff — the library's auto-reconnect typically races with the first call.

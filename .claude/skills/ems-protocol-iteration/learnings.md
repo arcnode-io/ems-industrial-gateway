@@ -37,7 +37,7 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 
 **Registry:** Harbor at `173.211.12.43:8083/library/` — NOT `registry.gitlab.com/...`. CI uses `docker login -u admin -p $HARBOR_PASSWORD`.
 
-**Docker network:** device-api `beta:` cfg block hardcodes `postgresHost: postgres` and `mqttBrokerUrl: mqtt://emqx:1883`. E2E spins up postgres + emqx + device-api on a shared Docker network (`gateway-e2e`) with container names matching. mock-modbus-server is NOT on the network — gateway (on the host) reaches it via mapped port.
+**Docker network:** device-api `beta:` cfg block hardcodes `postgresHost: postgres` and `mqttBrokerUrl: mqtt://hivemq:1883`. E2E spins up postgres + hivemq + device-api on a shared Docker network (`gateway-e2e`) with container names matching. mock-modbus-server is NOT on the network — gateway (on the host) reaches it via mapped port.
 
 **What I wish I'd known before starting Modbus:**
 - The `enable()` race. Retry from day 1.
@@ -74,7 +74,7 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 - `testcontainers::core::ContainerPort::Udp(161)` to expose UDP. Default `with_exposed_port(161)` is TCP and fails later with "container does not expose port 161/tcp".
 - Looking up the mapped UDP port: `container.get_host_port_ipv4(ContainerPort::Udp(161))`. Plain `get_host_port_ipv4(161)` assumes TCP.
 - `SocketAddr::parse()` requires an IP literal, NOT a hostname. testcontainers reports a `Host` (often a hostname like `localhost`). Use `tokio::net::lookup_host((host, port))` to resolve. csnmp's `Snmp2cClient::new` wants a real `SocketAddr`.
-- Stale containers between CI runs: shared-network containers (postgres, emqx, device-api) use FIXED names so device-api's beta cfg can resolve them by hostname. A killed prior run leaves them named on the daemon; the next run hits `Conflict: container name "/emqx" already in use`. Fix: `before_script` in `.gitlab-ci.yml` runs `docker rm -f postgres emqx device-api 2>/dev/null` + `docker network rm gateway-e2e`.
+- Stale containers between CI runs: shared-network containers (postgres, hivemq, device-api) use FIXED names so device-api's beta cfg can resolve them by hostname. A killed prior run leaves them named on the daemon; the next run hits `Conflict: container name "/hivemq" already in use`. Fix: `before_script` in `.gitlab-ci.yml` runs `docker rm -f postgres hivemq device-api 2>/dev/null` + `docker network rm gateway-e2e`.
 
 **Dockerfile gotcha:** Same workspace-root stub trick from Modbus (`src/lib.rs` + stub other members). Updated mock-snmp-agent Dockerfile lists modbus + other peer dirs so `cargo build -p mock-snmp-agent` resolves the workspace cleanly.
 
@@ -103,7 +103,7 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 
 **Test gotchas:**
 - `start_mock_redfish_service` exposes plain `ContainerPort::Tcp(8443)` (no UDP/special). Default behavior works.
-- Test now spins up 6 containers (`postgres`, `emqx`, `device-api`, `mock-modbus-server`, `mock-snmp-agent`, `mock-redfish-service`). The 3 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only `postgres`/`emqx`/`device-api` need the network (device-api's beta cfg resolves `postgres` + `emqx` by name).
+- Test now spins up 6 containers (`postgres`, `hivemq`, `device-api`, `mock-modbus-server`, `mock-snmp-agent`, `mock-redfish-service`). The 3 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only `postgres`/`hivemq`/`device-api` need the network (device-api's beta cfg resolves `postgres` + `hivemq` by name).
 - `network_switch` template's measurements have `poll_rate_hz` between 0.1 and 1 — for Tier 1 hardcoded one-shot reads, the rate is irrelevant. Won't matter until Tier 2's continuous-poll loop.
 
 **Dockerfile gotcha:** Same workspace-stub trick from earlier protocols. When adding the NEXT fixture, update its Dockerfile's sibling list to include every existing fixture crate (so cargo can resolve the workspace cleanly).
@@ -184,7 +184,7 @@ server.bind().await?; // returns ServerHandle; spawn the await in a task or it b
 
 **Test gotchas:**
 - `start_mock_dnp3_outstation` exposes `ContainerPort::Tcp(20000)`. Standard pattern.
-- Test now spins up 7 containers (postgres, emqx, device-api, mock-modbus-server, mock-snmp-agent, mock-redfish-service, mock-dnp3-outstation). DNS network membership unchanged — only the 3 stack containers (postgres/emqx/device-api) are on `gateway-e2e`.
+- Test now spins up 7 containers (postgres, hivemq, device-api, mock-modbus-server, mock-snmp-agent, mock-redfish-service, mock-dnp3-outstation). DNS network membership unchanged — only the 3 stack containers (postgres/hivemq/device-api) are on `gateway-e2e`.
 - Sawtooth range for `phase_a_current` is [100, 200] amps; assertion uses `(100.0..=200.0).contains(amps)`.
 
 **Retry/handshake:**
@@ -250,7 +250,7 @@ Note the variant-binding-style pattern — clippy `redundant_guards` requires `s
 
 **Test gotchas:**
 - `start_mock_bacnet_device` exposes `ContainerPort::Udp(47808)`. Standard pattern but watch for IPv4/IPv6 (see above).
-- 8-container test now: postgres, emqx, device-api, modbus, snmp, redfish, dnp3, bacnet. The 5 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only postgres/emqx/device-api need the network.
+- 8-container test now: postgres, hivemq, device-api, modbus, snmp, redfish, dnp3, bacnet. The 5 protocol fixtures stay OFF the shared `gateway-e2e` Docker network — gateway reaches them via host port mapping. Only postgres/hivemq/device-api need the network.
 
 **Retry/handshake:** UDP — no handshake to race. First read usually succeeds. Kept the 5-attempt `500ms * 2^n` retry from the other protocols for parity, plus a per-attempt 800ms `recv_from` timeout so the gateway doesn't hang forever.
 

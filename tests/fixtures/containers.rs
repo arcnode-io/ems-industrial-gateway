@@ -1,7 +1,7 @@
 //! Testcontainer helpers for the gateway e2e test.
 //!
-//! Postgres / emqx / device-api join a shared Docker network so device-api
-//! resolves `postgres` and `emqx` hostnames per its `beta:` cfg block.
+//! Postgres / hivemq / device-api join a shared Docker network so device-api
+//! resolves `postgres` and `hivemq` hostnames per its `beta:` cfg block.
 //! mock-modbus-server doesn't need the network — the gateway (running on the
 //! host) reaches it via the testcontainer's mapped port.
 
@@ -27,15 +27,15 @@ pub async fn start_postgres() -> anyhow::Result<ContainerAsync<GenericImage>> {
     Ok(c)
 }
 
-/// Spin up emqx on the shared network with hostname `emqx`.
-pub async fn start_emqx() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("emqx/emqx", "latest")
+/// Spin up hivemq on the shared network with hostname `hivemq`.
+pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("hivemq/hivemq-ce", "latest")
         .with_exposed_port(ContainerPort::Tcp(1883))
         .with_wait_for(WaitFor::message_on_stdout(
-            "Listener tcp:default on 0.0.0.0:1883 started.",
+            "Started TCP Listener on address 0.0.0.0 and on port 1883.",
         ))
         .with_network(NETWORK)
-        .with_container_name("emqx")
+        .with_container_name("hivemq")
         .start()
         .await?;
     Ok(c)
@@ -94,7 +94,7 @@ pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<Generic
 }
 
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
-/// `emqx` via the shared Docker network.
+/// `hivemq` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("173.211.12.43:8083/library/ems-device-api", "latest")
         .with_exposed_port(ContainerPort::Tcp(3000))
