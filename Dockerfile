@@ -5,4 +5,4 @@ COPY src src
 COPY cfg.yml .
 COPY Cargo.* ./
 RUN cargo install --path .
-CMD ["industrial-gateway"]
+CMD ["ems-industrial-gateway"]
