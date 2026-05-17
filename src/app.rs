@@ -10,7 +10,7 @@
 //!    On respawn: cancel + join existing tasks, re-fetch spec, build new set.
 //! 6. On exit: disconnect MQTT cleanly.
 
-use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding};
+use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
 use crate::bacnet::client as bacnet;
 use crate::config::Config;
 use crate::dnp3::client as dnp3;
@@ -19,7 +19,9 @@ use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
 use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
+use crate::synthetic::{self, Formula, InputCache, SyntheticTaskConfig};
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::time::Duration;
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval};
@@ -45,11 +47,20 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     );
 
     let mut client = publisher::connect(&cfg.broker_url, "ems-industrial-gateway").await?;
-    let mut beacon_rx = subscriber::subscribe_topology_changed(&mut client).await?;
+    // Fetch the spec first so we know which input topics to subscribe to.
     let initial_spec = fetch_asyncapi(&cfg.device_api_url).await?;
     info!(version = %initial_spec.info.version, "initial spec fetched");
 
-    let (mut task_handles, mut task_cancel) = spawn_task_set(&initial_spec, &cfg, client.clone());
+    // Synthetic-channel input topics. Subscribed alongside the beacon so the
+    // single dispatcher routes both. Reconcile-time additions are NOT
+    // dynamically resubscribed today; topology changes that introduce NEW
+    // synthetic inputs need a gateway restart (logged + tracked in handoff).
+    let input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
+    let cache = synthetic::new_input_cache();
+    let mut beacon_rx = subscriber::subscribe(&mut client, &input_topics, cache.clone()).await?;
+
+    let (mut task_handles, mut task_cancel) =
+        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
 
     loop {
         tokio::select! {
@@ -70,14 +81,15 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                     Err(e) => {
                         warn!(error = %e, "respawn fetch failed; keeping current task set");
                         // Re-spawn the old set so we don't end up idle.
-                        let (h, c) = spawn_task_set(&initial_spec, &cfg, client.clone());
+                        let (h, c) =
+                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
                         task_handles = h;
                         task_cancel = c;
                         continue;
                     }
                 };
                 info!(version = %fresh.info.version, "spec re-fetched");
-                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone());
+                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone());
                 task_handles = h;
                 task_cancel = c;
             }
@@ -92,21 +104,46 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
 }
 
 /// Walk the spec's x-protocol-source and spawn one task per
-/// (device, measurement) tuple. Returns a `JoinSet` of handles and the parent
-/// `CancellationToken` used to stop them en masse on reconcile.
+/// (device, measurement) tuple. Synthetic bindings get their own loop
+/// (no south-side poll); all others go through the protocol-poll path.
+/// Returns a `JoinSet` of handles and the parent `CancellationToken` used to
+/// stop them en masse on reconcile.
 fn spawn_task_set(
     spec: &AsyncApiSpec,
     cfg: &Config,
     client: paho_mqtt::AsyncClient,
+    cache: InputCache,
 ) -> (JoinSet<()>, CancellationToken) {
     let parent = CancellationToken::new();
     let mut handles = JoinSet::new();
-    let mut spawned = 0usize;
+    let mut spawned_poll = 0usize;
+    let mut spawned_synthetic = 0usize;
     for (device_id, channels) in &spec.x_protocol_source {
         for (measurement, source) in channels {
             let task_cancel = parent.child_token();
             let topic = build_topic(&cfg.site_id, device_id, measurement, &source.unit);
             let poll_rate = clamp_poll_rate(source.poll_rate_hz, &topic);
+            if let ProtocolBinding::Synthetic(b) = &source.binding {
+                if let Some(handle) = spawn_synthetic(
+                    b,
+                    &topic,
+                    poll_rate,
+                    &cfg.site_id,
+                    cache.clone(),
+                    client.clone(),
+                ) {
+                    handles.spawn(async move {
+                        // The synthetic spawn returns its own JoinHandle; await
+                        // it inside this JoinSet entry so the parent's cancel
+                        // semantics still control teardown via process exit.
+                        let _ = handle.await;
+                    });
+                    spawned_synthetic += 1;
+                    info!(%device_id, %measurement, %topic, poll_rate, "synthetic task spawned");
+                }
+                let _ = task_cancel; // synthetic loop doesn't accept a cancel token today
+                continue;
+            }
             let binding = clone_binding(&source.binding);
             let topic_for_task = topic.clone();
             let client_for_task = client.clone();
@@ -120,12 +157,68 @@ fn spawn_task_set(
                 )
                 .await;
             });
-            spawned += 1;
-            info!(%device_id, %measurement, %topic, poll_rate, "task spawned");
+            spawned_poll += 1;
+            info!(%device_id, %measurement, %topic, poll_rate, "poll task spawned");
         }
     }
-    info!(spawned, "task set built");
+    info!(spawned_poll, spawned_synthetic, "task set built");
     (handles, parent)
+}
+
+/// Build a `SyntheticTaskConfig` and spawn the loop. Returns None if the
+/// formula name is unknown (logged and the channel is dropped — the gateway
+/// keeps running for valid channels).
+#[allow(clippy::too_many_arguments)]
+fn spawn_synthetic(
+    binding: &SyntheticBinding,
+    output_topic: &str,
+    tick_hz: f64,
+    site_id: &str,
+    cache: InputCache,
+    mqtt: paho_mqtt::AsyncClient,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let formula = match Formula::parse(&binding.formula) {
+        Ok(f) => f,
+        Err(err) => {
+            warn!(output_topic, error = %err, "synthetic formula parse failed; dropping channel");
+            return None;
+        }
+    };
+    let input_topics: Vec<String> = binding
+        .inputs
+        .iter()
+        .map(|t| substitute_site_id(t, site_id))
+        .collect();
+    let cfg = SyntheticTaskConfig {
+        output_topic: output_topic.to_string(),
+        input_topics,
+        formula,
+        tick_hz,
+    };
+    Some(synthetic::task::spawn(cfg, cache, mqtt))
+}
+
+/// Walk the spec for synthetic bindings + collect the unique set of input
+/// topics (with `{site_id}` substituted). Used to subscribe up-front so cached
+/// values are available by the time synthetic tasks tick.
+fn collect_synthetic_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
+    let mut topics: BTreeSet<String> = BTreeSet::new();
+    for channels in spec.x_protocol_source.values() {
+        for source in channels.values() {
+            if let ProtocolBinding::Synthetic(b) = &source.binding {
+                for raw in &b.inputs {
+                    topics.insert(substitute_site_id(raw, site_id));
+                }
+            }
+        }
+    }
+    topics.into_iter().collect()
+}
+
+/// Substitute `{site_id}` in an input topic template. `{device_id}` is
+/// already resolved by ems-device-api at AsyncAPI generation time.
+fn substitute_site_id(template: &str, site_id: &str) -> String {
+    template.replace("{site_id}", site_id)
 }
 
 /// One per-measurement loop. Ticks at `poll_rate_hz`, reads via the protocol
