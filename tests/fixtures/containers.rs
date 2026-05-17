@@ -51,7 +51,7 @@ pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
 /// Spin up mock-modbus-server. Not on the shared network — gateway reaches it
 /// from the host via mapped port.
 pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/mock-modbus-server", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-modbus-server", "latest")
         .with_exposed_port(ContainerPort::Tcp(502))
         .with_wait_for(WaitFor::message_on_stdout("mock-modbus-server listening"))
         .start()
@@ -61,7 +61,7 @@ pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<Generic
 
 /// Spin up mock-snmp-agent. UDP 161 mapped; gateway reaches it via host port.
 pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/mock-snmp-agent", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-snmp-agent", "latest")
         .with_exposed_port(ContainerPort::Udp(161))
         .with_wait_for(WaitFor::message_on_stdout("mock-snmp-agent listening"))
         .start()
@@ -71,7 +71,7 @@ pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericIma
 
 /// Spin up mock-redfish-service. HTTP on TCP 8443 mapped to host.
 pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/mock-redfish-service", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-redfish-service", "latest")
         .with_exposed_port(ContainerPort::Tcp(8443))
         .with_wait_for(WaitFor::message_on_stdout("mock-redfish-service listening"))
         .start()
@@ -81,7 +81,7 @@ pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<Gener
 
 /// Spin up mock-dnp3-outstation. TCP 20000 mapped to host.
 pub async fn start_mock_dnp3_outstation() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/mock-dnp3-outstation", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-dnp3-outstation", "latest")
         .with_exposed_port(ContainerPort::Tcp(20000))
         .with_wait_for(WaitFor::message_on_stdout("mock-dnp3-outstation listening"))
         .start()
@@ -92,7 +92,7 @@ pub async fn start_mock_dnp3_outstation() -> anyhow::Result<ContainerAsync<Gener
 /// Spin up mock-bacnet-device. UDP 47808 mapped; gateway reaches it via
 /// host port. Not on the shared Docker network.
 pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/mock-bacnet-device", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-bacnet-device", "latest")
         .with_exposed_port(ContainerPort::Udp(47808))
         .with_wait_for(WaitFor::message_on_stdout("mock-bacnet-device listening"))
         .start()
@@ -103,7 +103,7 @@ pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<Generic
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
 /// `hivemq` via the shared Docker network.
 pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {
-    let c = GenericImage::new("173.211.12.43:8083/library/ems-device-api", "latest")
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/ems-device-api", "latest")
         .with_exposed_port(ContainerPort::Tcp(3000))
         .with_wait_for(WaitFor::message_on_stdout(
             "Nest application successfully started",
