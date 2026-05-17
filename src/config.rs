@@ -18,7 +18,9 @@ pub struct Config {
     pub log_level: String,
 }
 
-/// Load cfg.yml. Picks `local:` block unless `ENV=beta`.
+/// Load cfg.yml. Picks `local:` block unless `ENV=beta`. `SITE_ID` env
+/// overrides the cfg.yml `site_id` field — operator-supplied site name
+/// (slugified by the orchestrator) flows in via UserData → config.env.
 pub fn load_config() -> anyhow::Result<Config> {
     let env_name = env::var("ENV").unwrap_or_else(|_| "local".to_string());
     let raw = fs::read_to_string(Path::new("cfg.yml"))?;
@@ -26,6 +28,9 @@ pub fn load_config() -> anyhow::Result<Config> {
     let block = all
         .get(&env_name)
         .ok_or_else(|| anyhow::anyhow!("cfg.yml missing block: {env_name}"))?;
-    let cfg: Config = serde_yaml::from_value(block.clone())?;
+    let mut cfg: Config = serde_yaml::from_value(block.clone())?;
+    if let Ok(site_id) = env::var("SITE_ID") {
+        cfg.site_id = site_id;
+    }
     Ok(cfg)
 }
