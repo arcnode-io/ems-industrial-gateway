@@ -61,6 +61,13 @@
         "unit_id": null
       },
       "blocking": []
+    },
+    "bess_module_1": {
+      "device_id": "bess_module_1",
+      "template": "bess_module",
+      "parent": null,
+      "connection": null,
+      "blocking": []
     }
   },
   "buses": [],
@@ -144,6 +151,28 @@
             "protocol": "dnp3_tcp",
             "point_index": 0,
             "point_type": "analog_input"
+          }
+        }
+      }
+    },
+    "bess_module": {
+      "template": "bess_module",
+      "kind": "module",
+      "description": "BESS module aggregation with synthetic headroom (test fixture)",
+      "contains": [],
+      "measurements": {
+        "import_headroom": {
+          "unit": "watts",
+          "type": "float",
+          "poll_rate_hz": 1,
+          "publisher": "gateway",
+          "binding": {
+            "protocol": "synthetic",
+            "formula": "subtract",
+            "inputs": [
+              "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
+              "sites/{site_id}/devices/bess_module_1/measurements/active_power/watts"
+            ]
           }
         }
       }
