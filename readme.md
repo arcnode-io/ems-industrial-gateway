@@ -17,15 +17,46 @@ topology beacon triggers a full task-set restart against the freshly-fetched
 spec. SIGINT or SIGTERM cancels the root token, drains tasks, disconnects
 cleanly.
 
-Five south-side protocols ship:
+Five south-side protocols plus a north-side derivation engine:
 
 | Protocol | Library | Notes |
 |---|---|---|
 | Modbus TCP | rodbus | Devices that natively speak Modbus RTU are covered when fronted by a serial→Ethernet bridge (Moxa NPort etc.) |
 | SNMP v2c | csnmp | UDP, public community by default |
 | Redfish | reqwest | HTTP/HTTPS, JSON Pointer extraction from response body |
-| DNP3 TCP | dnp3 | Single-point ReadProperty on AnalogInput |
+| DNP3 TCP | dnp3 | Single-point ReadProperty on AnalogInput; optional `variation` audit field |
 | BACnet/IP | bacnet-rs | UDP 47808, single ReadProperty; devices behind a BACnet router (Loytec, Easy/IO, ABB) cover MS-TP transparently |
+| Synthetic | — | Pure-function derivations over cached MQTT inputs. See [Synthetic Derivations](#synthetic-derivations). |
+
+## Synthetic Derivations
+
+Some measurements aren't read off a south-side device — they're computed by
+the gateway from values already on the MQTT bus. `bess_module.import_headroom`
+is the canonical example: `operating_envelope.import_limit − bess_module.active_power`.
+
+The template carries the binding:
+
+```yaml
+import_headroom:
+  unit: watts
+  type: float
+  publisher: gateway
+  binding:
+    protocol: synthetic
+    formula: subtract
+    inputs:
+      - sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts
+      - sites/{site_id}/devices/{device_id}/measurements/active_power/watts
+```
+
+How the gateway runs it:
+
+1. **Boot**: collect every synthetic binding's `inputs[]` (with `{site_id}` substituted from cfg), subscribe to all of them via the single MQTT subscriber.
+2. **Cache**: incoming FloatSample messages land in a shared `DashMap<topic, (value, instant)>`.
+3. **Tick**: per-channel async task reads the cached values, applies the formula (one of `subtract`, `sum`, `mean`, `max`, `min`), publishes a FloatSample on the canonical output topic.
+4. **Hold semantic**: synthetic does NOT publish until every declared input has at least one cached sample. Consumers infer "headroom unavailable" from the underlying inputs' status channels.
+
+`{device_id}` in `inputs[]` is already resolved by ems-device-api at AsyncAPI generation time; gateway only substitutes `{site_id}`.
 
 ## Pre-requisites
 
