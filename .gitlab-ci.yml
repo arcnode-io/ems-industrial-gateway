@@ -15,6 +15,15 @@ check:
     - docker rm -f postgres emqx hivemq device-api 2>/dev/null || true
     - docker ps -aq --filter "ancestor=hivemq/hivemq-ce" | xargs -r docker rm -f
     - docker ps -aq --filter "ancestor=emqx/emqx" | xargs -r docker rm -f
+    # Mock containers ride on auto-generated docker names (silly_lamarr etc.)
+    # so we sweep them by image. Without this, a canceled pipeline leaves
+    # mock-* containers holding ports 502/161/8443/20000/47808 and the next
+    # run's testcontainers wait forever for the listening log.
+    - >-
+      for img in mock-modbus-server mock-snmp-agent mock-redfish-service
+      mock-dnp3-outstation mock-bacnet-device ems-device-api; do
+        docker ps -aq --filter "ancestor=public.ecr.aws/y1d2j6a8/$img" | xargs -r docker rm -f
+      done
     - docker network rm gateway-e2e 2>/dev/null || true
   script:
     - cargo cmd checks
