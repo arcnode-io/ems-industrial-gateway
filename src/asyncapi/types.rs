@@ -66,6 +66,11 @@ pub enum ProtocolBinding {
     /// sees BACnet/IP UDP.
     #[serde(rename = "bacnet_ip")]
     BacnetIp(BacnetIpBinding),
+    /// Synthetic: gateway-computed pure function of cached MQTT inputs.
+    /// No south-side protocol; produces an MQTT publish from upstream MQTT
+    /// subscriptions. See `src/synthetic/`.
+    #[serde(rename = "synthetic")]
+    Synthetic(SyntheticBinding),
 }
 
 /// Modbus TCP binding fields (template + device.connection merged in
@@ -142,4 +147,22 @@ pub struct Dnp3TcpBinding {
     /// Point object class: `analog_input`, `binary_input`, `counter`, etc.
     /// Tier 1 only reads `analog_input`.
     pub point_type: String,
+    /// Optional outstation static variation (audit metadata; gateway uses
+    /// default-variation polling when unset).
+    #[serde(default)]
+    pub variation: Option<u8>,
+}
+
+/// Synthetic binding: gateway computes a value from cached MQTT inputs via a
+/// named formula. No south-side device; the "south" is MQTT itself.
+///
+/// Topic placeholders in `inputs`:
+/// - `{site_id}` — substituted from gateway runtime config at subscribe time.
+/// - `{device_id}` — already resolved by `ems-device-api` at AsyncAPI gen time.
+#[derive(Debug, Deserialize)]
+pub struct SyntheticBinding {
+    /// Formula name: `subtract`, `sum`, `mean`, `max`, `min`.
+    pub formula: String,
+    /// Input topic templates the synthetic task subscribes to and caches.
+    pub inputs: Vec<String>,
 }

@@ -170,6 +170,13 @@ async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
         ProtocolBinding::Redfish(b) => redfish::read_measurement(b).await,
         ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b).await,
         ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b).await,
+        // Synthetic channels are driven by `src/synthetic/` (own loop with
+        // MQTT subscriptions + formula evaluation); never reached via the
+        // single-point poll path. Unreachable acts as a tripwire if the
+        // dispatcher upstream forgets to route synthetic channels separately.
+        ProtocolBinding::Synthetic(_) => {
+            unreachable!("synthetic bindings are driven by the synthetic module, not read_value")
+        }
     }
 }
 
@@ -199,6 +206,7 @@ fn clamp_poll_rate(value: Option<f64>, topic: &str) -> f64 {
 fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
     use crate::asyncapi::types::{
         BacnetIpBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding, SnmpBinding,
+        SyntheticBinding,
     };
     match b {
         ProtocolBinding::ModbusTcp(m) => ProtocolBinding::ModbusTcp(ModbusTcpBinding {
@@ -225,6 +233,11 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             port: d.port,
             point_index: d.point_index,
             point_type: d.point_type.clone(),
+            variation: d.variation,
+        }),
+        ProtocolBinding::Synthetic(s) => ProtocolBinding::Synthetic(SyntheticBinding {
+            formula: s.formula.clone(),
+            inputs: s.inputs.clone(),
         }),
         ProtocolBinding::BacnetIp(b) => ProtocolBinding::BacnetIp(BacnetIpBinding {
             host: b.host.clone(),

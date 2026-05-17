@@ -11,3 +11,4 @@ pub mod modbus;
 pub mod mqtt;
 pub mod redfish;
 pub mod snmp;
+pub mod synthetic;
