@@ -286,11 +286,21 @@ async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result
     let import_payload = r#"{"ts":"2026-05-17T00:00:00Z","value":5000000.0}"#;
     let active_payload = r#"{"ts":"2026-05-17T00:00:00Z","value":2000000.0}"#;
 
+    // Retain=true (per ADR-002 §11 measurement-family default) so the gateway
+    // sees the inputs even if our publish lands before it subscribes.
     pub_client
-        .publish(paho_mqtt::Message::new(import_topic, import_payload, 0))
+        .publish(paho_mqtt::Message::new_retained(
+            import_topic,
+            import_payload,
+            0,
+        ))
         .await?;
     pub_client
-        .publish(paho_mqtt::Message::new(active_topic, active_payload, 0))
+        .publish(paho_mqtt::Message::new_retained(
+            active_topic,
+            active_payload,
+            0,
+        ))
         .await?;
 
     // Assert — collect at least one synthetic output sample within COLLECTION_TIMEOUT.
