@@ -166,3 +166,77 @@ pub struct SyntheticBinding {
     /// Input topic templates the synthetic task subscribes to and caches.
     pub inputs: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_synthetic_binding_from_x_protocol_source_json() {
+        // Arrange — same shape device-api emits in x-protocol-source for a
+        // bess_module headroom channel (synthetic + publisher=gateway).
+        let json = r#"{
+            "unit": "watts",
+            "poll_rate_hz": 1.0,
+            "protocol": "synthetic",
+            "formula": "subtract",
+            "inputs": [
+                "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
+                "sites/{site_id}/devices/bess_module_1/measurements/active_power/watts"
+            ]
+        }"#;
+        // Act
+        let src: ProtocolSource = serde_json::from_str(json).unwrap();
+        // Assert — variant + formula + inputs[] survive deserialization
+        let ProtocolBinding::Synthetic(b) = src.binding else {
+            panic!("expected Synthetic variant");
+        };
+        assert_eq!(b.formula, "subtract");
+        assert_eq!(b.inputs.len(), 2);
+        assert!(b.inputs[1].contains("bess_module_1"));
+    }
+
+    #[test]
+    fn deserialize_dnp3_binding_accepts_optional_variation() {
+        // Arrange — Dnp3 binding with variation set (Group 30 Var 5 = float)
+        let json = r#"{
+            "unit": "amps",
+            "poll_rate_hz": 1.0,
+            "protocol": "dnp3_tcp",
+            "host": "10.0.0.7",
+            "port": 20000,
+            "point_index": 10,
+            "point_type": "analog_input",
+            "variation": 5
+        }"#;
+        // Act
+        let src: ProtocolSource = serde_json::from_str(json).unwrap();
+        // Assert
+        let ProtocolBinding::Dnp3Tcp(b) = src.binding else {
+            panic!("expected Dnp3Tcp variant");
+        };
+        assert_eq!(b.variation, Some(5));
+        assert_eq!(b.point_index, 10);
+    }
+
+    #[test]
+    fn deserialize_dnp3_binding_variation_defaults_to_none() {
+        // Arrange — older spec without `variation` field
+        let json = r#"{
+            "unit": "amps",
+            "poll_rate_hz": 1.0,
+            "protocol": "dnp3_tcp",
+            "host": "10.0.0.7",
+            "port": 20000,
+            "point_index": 10,
+            "point_type": "analog_input"
+        }"#;
+        // Act
+        let src: ProtocolSource = serde_json::from_str(json).unwrap();
+        // Assert — variation falls back to None (default)
+        let ProtocolBinding::Dnp3Tcp(b) = src.binding else {
+            panic!("expected Dnp3Tcp variant");
+        };
+        assert_eq!(b.variation, None);
+    }
+}
