@@ -10,6 +10,17 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
+use std::sync::OnceLock;
+
+static TRACING_INIT: OnceLock<()> = OnceLock::new();
+
+/// Initialize tracing once across all tests so gateway logs land in the
+/// test runner's output (visible with `--nocapture`). RUST_LOG honored.
+fn init_tracing() {
+    TRACING_INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt::try_init();
+    });
+}
 use fixtures::containers::{
     start_device_api, start_hivemq, start_mock_bacnet_device, start_mock_dnp3_outstation,
     start_mock_modbus_server, start_mock_redfish_service, start_mock_snmp_agent, start_postgres,
@@ -30,6 +41,7 @@ const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[tokio::test]
 async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Result<()> {
+    init_tracing();
     // Arrange — spin up testcontainers in parallel
     let (pg, hivemq, modbus_fix, snmp_fix, redfish_fix, dnp3_fix, bacnet_fix) = tokio::try_join!(
         start_postgres(),
@@ -220,6 +232,7 @@ async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Re
 /// after edp-api/ems-device-api commits land.
 #[tokio::test]
 async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result<()> {
+    init_tracing();
     // Arrange — minimal fixture: MQTT + postgres (device-api dep) + device-api
     let (pg, hivemq) = tokio::try_join!(start_postgres(), start_hivemq())?;
     let _ = &pg;

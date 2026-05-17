@@ -131,17 +131,17 @@ fn spawn_task_set(
                     &cfg.site_id,
                     cache.clone(),
                     client.clone(),
+                    task_cancel.clone(),
                 ) {
                     handles.spawn(async move {
                         // The synthetic spawn returns its own JoinHandle; await
-                        // it inside this JoinSet entry so the parent's cancel
-                        // semantics still control teardown via process exit.
+                        // it inside this JoinSet entry so shutdown completes
+                        // when the loop exits on its cancel token.
                         let _ = handle.await;
                     });
                     spawned_synthetic += 1;
                     info!(%device_id, %measurement, %topic, poll_rate, "synthetic task spawned");
                 }
-                let _ = task_cancel; // synthetic loop doesn't accept a cancel token today
                 continue;
             }
             let binding = clone_binding(&source.binding);
@@ -176,6 +176,7 @@ fn spawn_synthetic(
     site_id: &str,
     cache: InputCache,
     mqtt: paho_mqtt::AsyncClient,
+    cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let formula = match Formula::parse(&binding.formula) {
         Ok(f) => f,
@@ -195,7 +196,7 @@ fn spawn_synthetic(
         formula,
         tick_hz,
     };
-    Some(synthetic::task::spawn(cfg, cache, mqtt))
+    Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
 }
 
 /// Walk the spec for synthetic bindings + collect the unique set of input

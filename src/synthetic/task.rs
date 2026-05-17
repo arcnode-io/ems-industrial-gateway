@@ -13,6 +13,7 @@ use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
 use std::time::Duration;
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 /// MQTT QoS for synthetic publishes — matches ADR-002 §11 measurement family.
@@ -30,24 +31,31 @@ pub struct SyntheticTaskConfig {
     pub tick_hz: f64,
 }
 
-/// Spawn the per-channel synthetic loop. The returned `JoinHandle` lives for
-/// the gateway's lifetime; caller is expected to keep it.
+/// Spawn the per-channel synthetic loop. The returned `JoinHandle` exits when
+/// `cancel` fires — gateway shutdown cancels the parent token and joins on the
+/// returned handle. Without the cancel hook the gateway would never finish
+/// `task_handles.join_next().await` because the synthetic loop ticked forever.
 pub fn spawn(
     cfg: SyntheticTaskConfig,
     cache: InputCache,
     mqtt: AsyncClient,
+    cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let period_ms = hz_to_period_ms(cfg.tick_hz);
         let mut ticker = interval(Duration::from_millis(period_ms));
         loop {
-            ticker.tick().await;
-            if let Err(err) = tick_once(&cfg, &cache, &mqtt).await {
-                warn!(
-                    topic = %cfg.output_topic,
-                    error = %err,
-                    "synthetic tick error",
-                );
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                _ = ticker.tick() => {
+                    if let Err(err) = tick_once(&cfg, &cache, &mqtt).await {
+                        warn!(
+                            topic = %cfg.output_topic,
+                            error = %err,
+                            "synthetic tick error",
+                        );
+                    }
+                }
             }
         }
     })
