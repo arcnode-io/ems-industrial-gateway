@@ -7,14 +7,21 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+/// Gateway runtime config — one stage block from cfg.defaults.yml after
+/// any cfg.customer.yml merge.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    /// HTTP base URL for device-api (e.g. `http://device-api:3000`).
     pub device_api_url: String,
+    /// MQTT broker URL (e.g. `tcp://hivemq:1883`).
     pub broker_url: String,
+    /// Site identifier used in MQTT topic paths (`sites/{site_id}/...`).
     pub site_id: String,
+    /// Log verbosity: `error | warn | info | debug`.
     pub log_level: String,
 }
 
+/// Production loader — reads `ENV` + `CFG_CUSTOMER_PATH` from process env.
 pub fn load_config() -> anyhow::Result<Config> {
     load_config_from(
         Path::new("cfg.defaults.yml"),
