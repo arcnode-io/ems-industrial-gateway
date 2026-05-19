@@ -65,6 +65,7 @@ fn merge_into_stage(all: &mut Value, env_name: &str, customer: Value) {
     }
 }
 
+/// In-place deep-merge of `over` onto `base` — nested mappings recurse, scalars + sequences overwrite.
 fn deep_merge(base: &mut Mapping, over: Mapping) {
     for (key, val) in over {
         match (base.get_mut(&key), val) {
