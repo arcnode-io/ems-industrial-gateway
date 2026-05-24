@@ -29,11 +29,12 @@ check:
     # has to cover binary startup, not network image fetch. Saves up to a
     # minute per image on a cold runner; turns "container startup timeout"
     # flakes into instant errors.
-    - >-
-      for img in mock-modbus-server mock-snmp-agent mock-redfish-service
-      mock-dnp3-outstation mock-bacnet-device ems-device-api; do
-        docker pull public.ecr.aws/y1d2j6a8/$img:latest &
-      done
+    - docker pull public.ecr.aws/y1d2j6a8/mock-modbus-server:latest &
+      docker pull public.ecr.aws/y1d2j6a8/mock-snmp-agent:latest &
+      docker pull public.ecr.aws/y1d2j6a8/mock-redfish-service:latest &
+      docker pull public.ecr.aws/y1d2j6a8/mock-dnp3-outstation:latest &
+      docker pull public.ecr.aws/y1d2j6a8/mock-bacnet-device:latest &
+      docker pull public.ecr.aws/y1d2j6a8/ems-device-api:latest &
       docker pull postgres:15 &
       docker pull hivemq/hivemq-ce:latest &
       wait
