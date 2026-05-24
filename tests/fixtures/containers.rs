@@ -69,6 +69,26 @@ pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericIma
     Ok(c)
 }
 
+/// Spin up mock-snmp-agent with SNMPv3 USM enabled (authPriv, SHA-256/AES-128).
+/// Passes the agent the security name + passphrases via env vars; the agent
+/// derives + caches the localized keys at startup so per-message handling
+/// is just a HashMap lookup.
+pub async fn start_mock_snmp_agent_v3(
+    security_name: &str,
+    auth_pass: &str,
+    priv_pass: &str,
+) -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-snmp-agent", "latest")
+        .with_exposed_port(ContainerPort::Udp(161))
+        .with_wait_for(WaitFor::message_on_stdout("SNMPv3 USM enabled"))
+        .with_env_var("SNMP_V3_USER", security_name)
+        .with_env_var("SNMP_V3_AUTH_PASS", auth_pass)
+        .with_env_var("SNMP_V3_PRIV_PASS", priv_pass)
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up mock-redfish-service. HTTP on TCP 8443 mapped to host.
 pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-redfish-service", "latest")
