@@ -5,9 +5,16 @@
 //! mock-modbus-server doesn't need the network — the gateway (running on the
 //! host) reaches it via the testcontainer's mapped port.
 
+use std::time::Duration;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+
+/// Generous container-startup ceiling. Default in testcontainers-rs is 60s,
+/// which is tight when a CI runner is cold-pulling 7 images in parallel for
+/// the big 5-protocol integration test. 180s gives slack without masking
+/// genuine startup bugs (those usually fail in <10s).
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Shared Docker network name for the e2e stack.
 pub const NETWORK: &str = "gateway-e2e";
@@ -22,6 +29,7 @@ pub async fn start_postgres() -> anyhow::Result<ContainerAsync<GenericImage>> {
         .with_env_var("POSTGRES_PASSWORD", "test")
         .with_network(NETWORK)
         .with_container_name("postgres")
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -43,6 +51,7 @@ pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
         .with_mapped_port(0, ContainerPort::Tcp(1883))
         .with_network(NETWORK)
         .with_container_name("hivemq")
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -54,6 +63,7 @@ pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<Generic
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-modbus-server", "latest")
         .with_exposed_port(ContainerPort::Tcp(502))
         .with_wait_for(WaitFor::message_on_stdout("mock-modbus-server listening"))
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -64,6 +74,7 @@ pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericIma
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-snmp-agent", "latest")
         .with_exposed_port(ContainerPort::Udp(161))
         .with_wait_for(WaitFor::message_on_stdout("mock-snmp-agent listening"))
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -84,6 +95,7 @@ pub async fn start_mock_snmp_agent_v3(
         .with_env_var("SNMP_V3_USER", security_name)
         .with_env_var("SNMP_V3_AUTH_PASS", auth_pass)
         .with_env_var("SNMP_V3_PRIV_PASS", priv_pass)
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -94,6 +106,7 @@ pub async fn start_mock_redfish_service() -> anyhow::Result<ContainerAsync<Gener
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-redfish-service", "latest")
         .with_exposed_port(ContainerPort::Tcp(8443))
         .with_wait_for(WaitFor::message_on_stdout("mock-redfish-service listening"))
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -104,6 +117,7 @@ pub async fn start_mock_dnp3_outstation() -> anyhow::Result<ContainerAsync<Gener
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-dnp3-outstation", "latest")
         .with_exposed_port(ContainerPort::Tcp(20000))
         .with_wait_for(WaitFor::message_on_stdout("mock-dnp3-outstation listening"))
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -115,6 +129,7 @@ pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<Generic
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-bacnet-device", "latest")
         .with_exposed_port(ContainerPort::Udp(47808))
         .with_wait_for(WaitFor::message_on_stdout("mock-bacnet-device listening"))
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
@@ -134,6 +149,7 @@ pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> 
             "postgres://postgres:test@postgres:5432/postgres",
         )
         .with_network(NETWORK)
+        .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
