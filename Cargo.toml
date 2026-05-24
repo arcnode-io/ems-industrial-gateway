@@ -13,7 +13,13 @@ missing_docs = "warn"
 [dependencies]
 rodbus = "1.4"
 dnp3 = "1.6"
-bacnet-rs = { version = "0.3", default-features = false, features = ["std"] }
+# Our fork at gitlab.com/joenarvaez/bacnet-sc-rs — superset of upstream
+# bacnet-rs (BACnet/IP + MS/TP + Ethernet) with BACnet/SC (Annex AB)
+# added. The fork preserves `lib name = bacnet_rs` so `use bacnet_rs::...`
+# in `src/bacnet/client.rs` (Annex J) keeps working. Replaces the
+# upstream crate (which had a `bacnet_rs` lib name collision when both
+# were specified).
+bacnet-sc-rs = { git = "https://gitlab.com/joenarvaez/bacnet-sc-rs", branch = "main", features = ["sc"] }
 snmp2 = { version = "0.5", features = ["v3", "tokio"] }
 paho-mqtt = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

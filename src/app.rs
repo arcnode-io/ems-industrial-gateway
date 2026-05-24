@@ -13,6 +13,7 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
 use crate::bacnet::client as bacnet;
+use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::{Config, GatewayCredentials};
 use crate::dnp3::client as dnp3;
 use crate::http::client::fetch_asyncapi;
@@ -294,6 +295,7 @@ async fn read_value(
         ProtocolBinding::Redfish(b) => redfish::read_measurement(b, trust, creds).await,
         ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b, trust, creds).await,
         ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b, trust, creds).await,
+        ProtocolBinding::BacnetSc(b) => bacnet_sc::read_measurement(b, trust, creds).await,
         // Synthetic channels are driven by `src/synthetic/` (own loop with
         // MQTT subscriptions + formula evaluation); never reached via the
         // single-point poll path. Unreachable acts as a tripwire if the
@@ -329,8 +331,8 @@ fn clamp_poll_rate(value: Option<f64>, topic: &str) -> f64 {
 /// of the code (forcing intentional copies here only).
 fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
     use crate::asyncapi::types::{
-        BacnetIpBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding, SnmpBinding,
-        SyntheticBinding,
+        BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding,
+        SnmpBinding, SyntheticBinding,
     };
     match b {
         ProtocolBinding::ModbusTcp(m) => ProtocolBinding::ModbusTcp(ModbusTcpBinding {
@@ -367,6 +369,13 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             host: b.host.clone(),
             port: b.port,
             device_instance: b.device_instance,
+            object_type: b.object_type.clone(),
+            object_instance: b.object_instance,
+            property_id: b.property_id.clone(),
+        }),
+        ProtocolBinding::BacnetSc(b) => ProtocolBinding::BacnetSc(BacnetScBinding {
+            hub_url: b.hub_url.clone(),
+            device_vmac: b.device_vmac.clone(),
             object_type: b.object_type.clone(),
             object_instance: b.object_instance,
             property_id: b.property_id.clone(),

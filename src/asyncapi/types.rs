@@ -72,6 +72,11 @@ pub enum ProtocolBinding {
     /// sees BACnet/IP UDP.
     #[serde(rename = "bacnet_ip")]
     BacnetIp(BacnetIpBinding),
+    /// BACnet/SC (Secure Connect) binding — ASHRAE 135-2020 Annex AB.
+    /// Standards-compliant secure variant: WebSocket+TLS+mTLS to a
+    /// hub, hub forwards to the destination device by VMAC.
+    #[serde(rename = "bacnet_sc")]
+    BacnetSc(BacnetScBinding),
     /// Synthetic: gateway-computed pure function of cached MQTT inputs.
     /// No south-side protocol; produces an MQTT publish from upstream MQTT
     /// subscriptions. See `src/synthetic/`.
@@ -136,6 +141,25 @@ pub struct BacnetIpBinding {
     /// Object type to read; Tier 1 supports `analog_input` only.
     pub object_type: String,
     /// Object instance number on the target.
+    pub object_instance: u32,
+    /// Property to read; Tier 1 supports `present_value` only.
+    pub property_id: String,
+}
+
+/// BACnet/SC (ASHRAE 135-2020 Annex AB) binding fields. The gateway dials
+/// the configured `hub_url` (wss://...), authenticates with mTLS using
+/// the credentials in `cfg.gateway_credentials`, then sends a
+/// ReadProperty over the hub addressed to `device_vmac`.
+#[derive(Debug, Deserialize)]
+pub struct BacnetScBinding {
+    /// `wss://host:port/` URL of the BACnet hub the device is connected to.
+    pub hub_url: String,
+    /// Destination VMAC (6 bytes) as a colon-separated hex string,
+    /// e.g. `"AA:BB:CC:DD:EE:FF"`.
+    pub device_vmac: String,
+    /// Object type to read; Tier 1 supports `analog_input` only.
+    pub object_type: String,
+    /// Object instance number on the target device.
     pub object_instance: u32,
     /// Property to read; Tier 1 supports `present_value` only.
     pub property_id: String,
