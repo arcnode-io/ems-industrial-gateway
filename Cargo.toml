@@ -73,3 +73,13 @@ integration = "cargo test --test integration_test -- --test-threads=1"
 cover = "cargo tarpaulin --skip-clean --exclude-files=src/{main,config}.rs --target-dir=target/coverage"
 review = "claude 'run code-reviewer agent against diff for quality and elegance'"
 commit = "cargo cmd checks && cargo cmd cover && cargo cmd review && git add -A && git cz && git push"
+
+# Reason: dev-mode async state machines are large — 6 protocol clients each
+# carry a TLS handshake state machine (rustls / tungstenite / sfio) inlined
+# into the dispatcher's future. With `opt-level = 0` (debug default) the
+# integration test thread's default 2MB stack overflows during the first
+# poll cycle. opt-level=1 inlines + shrinks state machines without losing
+# debug info or meaningfully slowing the build. Standard fix for tokio
+# projects with many TLS deps; recommended by the tokio docs.
+[profile.test]
+opt-level = 1
