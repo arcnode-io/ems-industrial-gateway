@@ -1,6 +1,11 @@
-//! Redfish HTTP client. GETs a resource, optionally drills with JSON Pointer.
+//! Redfish client. GETs a resource, optionally drills with JSON Pointer.
+//! Plain HTTP + HTTPS+mTLS branches share the same fetch loop; only the
+//! reqwest Client + URL scheme differ.
 
+use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::RedfishBinding;
+use crate::config::GatewayCredentials;
+use crate::redfish::tls;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
@@ -11,14 +16,22 @@ use tracing::warn;
 /// Same retry curve as the other protocols — handles boot-time race.
 const MAX_READ_ATTEMPTS: u32 = 5;
 
-/// Full read pipeline for a Redfish measurement: GET resource, drill into
-/// the JSON via the binding's pointer (if any), coerce to f64.
-pub async fn read_measurement(b: &RedfishBinding) -> Result<f64> {
-    let url = format!("http://{}:{}/redfish/v1{}", b.host, b.port, b.uri);
-    let client = Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("build reqwest client")?;
+/// Full read pipeline for a Redfish measurement.
+///
+/// `trust = Some(TlsMutual{..})` + `creds = Some(..)` → HTTPS+mTLS dial
+/// (DSP0266 §13.1 + §13.3.5). Else falls back to plain HTTP.
+pub async fn read_measurement(
+    b: &RedfishBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<f64> {
+    let (client, scheme) = match (trust, creds) {
+        (Some(DeviceTrust::TlsMutual { .. }), Some(creds)) => {
+            (tls::build_https_client(creds)?, "https")
+        }
+        _ => (build_plain_client()?, "http"),
+    };
+    let url = format!("{}://{}:{}/redfish/v1{}", scheme, b.host, b.port, b.uri);
 
     let body = fetch(&client, &url).await?;
     let value: &Value = match &b.json_pointer {
@@ -32,7 +45,16 @@ pub async fn read_measurement(b: &RedfishBinding) -> Result<f64> {
         .with_context(|| format!("expected numeric Redfish value at {url}, got {value:?}"))
 }
 
-/// HTTP GET with exponential backoff on transient errors.
+/// Plain HTTP client. Existing behavior — kept for pre-trust DTMs.
+fn build_plain_client() -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("build reqwest plain Client")
+}
+
+/// HTTP(S) GET with exponential backoff on transient errors. Shared by both
+/// branches — the `Client` carries TLS config (or not).
 async fn fetch(client: &Client, url: &str) -> Result<Value> {
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..MAX_READ_ATTEMPTS {

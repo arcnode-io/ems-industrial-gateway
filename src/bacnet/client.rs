@@ -1,7 +1,9 @@
 //! BACnet/IP master client. Tier 1: one-shot `ReadProperty` of
 //! `present_value` on an `AnalogInput` object, returned as `f64`.
 
+use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::BacnetIpBinding;
+use crate::config::GatewayCredentials;
 use anyhow::{Context, Result};
 use bacnet_rs::app::Apdu;
 use bacnet_rs::network::Npdu;
@@ -23,7 +25,16 @@ const READ_TIMEOUT: Duration = Duration::from_millis(800);
 const INVOKE_ID: u8 = 1;
 
 /// Full read pipeline for a BACnet measurement.
-pub async fn read_measurement(b: &BacnetIpBinding) -> Result<f64> {
+///
+/// `trust` carries the device's `x-device-trust`. Standards-compliant secure
+/// BACnet = BACnet/SC (ASHRAE 135 Annex AB); `bacnet-rs` 0.3 doesn't impl.
+/// `creds` unused on this path. PM ruling pending: defer device class vs
+/// accept plain + doc gap.
+pub async fn read_measurement(
+    b: &BacnetIpBinding,
+    _trust: Option<&DeviceTrust>,
+    _creds: Option<&GatewayCredentials>,
+) -> Result<f64> {
     if b.object_type != "analog_input" {
         anyhow::bail!(
             "Tier 1 BACnet only supports analog_input object_type, got {}",

@@ -14,9 +14,9 @@ missing_docs = "warn"
 rodbus = "1.4"
 dnp3 = "1.6"
 bacnet-rs = { version = "0.3", default-features = false, features = ["std"] }
-csnmp = "0.6"
+snmp2 = { version = "0.5", features = ["v3", "tokio"] }
 paho-mqtt = "0.13"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 tokio-util = { version = "0.7", default-features = false }
 tracing = "0.1.41"
@@ -32,8 +32,16 @@ futures = "0.3"
 dashmap = "6.1.0"
 
 [dev-dependencies]
+axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+rustls = "0.23"
+rustls-pemfile = "2"
 tempfile = "3"
 testcontainers = "0.20"
+tokio-rustls = "0.26"
+wiremock = "0.6"
+yasna = "0.5"
 
 [lib]
 name = "ems_industrial_gateway"

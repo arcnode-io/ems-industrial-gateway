@@ -1,8 +1,13 @@
-//! DNP3 master client wrapping `dnp3::master::*`.
+//! DNP3 master client wrapping `dnp3::master::*`. Plain TCP + DNP3/TLS
+//! (IEEE 1815 Annex E) branches share the same read pipeline; only the
+//! channel-spawn step differs.
 //!
 //! Tier 1: one-shot read of a single AnalogInput at a given point_index.
 
+use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::Dnp3TcpBinding;
+use crate::config::GatewayCredentials;
+use crate::dnp3::tls;
 use anyhow::{Context, Result};
 use dnp3::app::Variation;
 use dnp3::app::measurement::AnalogInput;
@@ -10,8 +15,9 @@ use dnp3::app::{ConnectStrategy, MaybeAsync, NullListener, ResponseHeader};
 use dnp3::link::{EndpointAddress, LinkErrorMode};
 use dnp3::master::{
     AssociationConfig, AssociationHandler, AssociationInformation, Classes, EventClasses,
-    HeaderInfo, MasterChannelConfig, ReadHandler, ReadRequest, ReadType,
+    HeaderInfo, MasterChannel, MasterChannelConfig, ReadHandler, ReadRequest, ReadType,
 };
+use dnp3::tcp::tls::spawn_master_tls_client;
 use dnp3::tcp::{EndpointList, spawn_master_tcp_client};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -27,7 +33,14 @@ const MASTER_ADDR: u16 = 1;
 const OUTSTATION_ADDR: u16 = 1024;
 
 /// Full read pipeline for a DNP3 measurement.
-pub async fn read_measurement(b: &Dnp3TcpBinding) -> Result<f64> {
+///
+/// `trust = Some(TlsMutual{..})` + `creds = Some(..)` → DNP3/TLS (CA-validated
+/// mTLS, port 19999 standard). Else falls back to plain DNP3/TCP.
+pub async fn read_measurement(
+    b: &Dnp3TcpBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<f64> {
     if b.point_type != "analog_input" {
         anyhow::bail!(
             "Tier 1 DNP3 only supports analog_input point_type, got {}",
@@ -37,7 +50,13 @@ pub async fn read_measurement(b: &Dnp3TcpBinding) -> Result<f64> {
     let endpoint = format!("{}:{}", b.host, b.port);
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..MAX_READ_ATTEMPTS {
-        match try_read(&endpoint, b.point_index).await {
+        let outcome = match (trust, creds) {
+            (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
+                try_read_tls(&endpoint, b.point_index, subject_name, creds).await
+            }
+            _ => try_read_plain(&endpoint, b.point_index).await,
+        };
+        match outcome {
             Ok(v) => return Ok(v),
             Err(e) => {
                 warn!(attempt, error = %e, "dnp3 read failed; retrying");
@@ -49,15 +68,41 @@ pub async fn read_measurement(b: &Dnp3TcpBinding) -> Result<f64> {
     Err(last_err.unwrap()).context("dnp3 read exhausted retries")
 }
 
-/// Single attempt — connect a fresh master, add association, read one point.
-async fn try_read(endpoint: &str, point_index: u16) -> Result<f64> {
-    let mut channel = spawn_master_tcp_client(
+/// Single plain-TCP read attempt.
+async fn try_read_plain(endpoint: &str, point_index: u16) -> Result<f64> {
+    let channel = spawn_master_tcp_client(
         LinkErrorMode::Close,
         MasterChannelConfig::new(EndpointAddress::try_new(MASTER_ADDR)?),
         EndpointList::single(endpoint.to_string()),
         ConnectStrategy::default(),
         NullListener::create(),
     );
+    read_with_channel(channel, point_index).await
+}
+
+/// Single DNP3/TLS read attempt. Builds `TlsClientConfig::full_pki` from the
+/// gateway's mTLS material + the device's expected subject name.
+async fn try_read_tls(
+    endpoint: &str,
+    point_index: u16,
+    subject_name: &str,
+    creds: &GatewayCredentials,
+) -> Result<f64> {
+    let tls_config = tls::build_tls_config(subject_name, creds)?;
+    let channel = spawn_master_tls_client(
+        LinkErrorMode::Close,
+        MasterChannelConfig::new(EndpointAddress::try_new(MASTER_ADDR)?),
+        EndpointList::single(endpoint.to_string()),
+        ConnectStrategy::default(),
+        NullListener::create(),
+        tls_config,
+    );
+    read_with_channel(channel, point_index).await
+}
+
+/// Shared post-spawn pipeline: add association, enable, issue one-shot read,
+/// extract the AnalogInput at `point_index` from the captured response.
+async fn read_with_channel(mut channel: MasterChannel, point_index: u16) -> Result<f64> {
     let captured: Arc<Mutex<HashMap<u16, f64>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut association = channel
         .add_association(

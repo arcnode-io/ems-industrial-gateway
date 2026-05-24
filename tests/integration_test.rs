@@ -134,6 +134,7 @@ async fn gateway_continuously_reads_five_protocols_and_publishes_to_mqtt() -> Re
         broker_url: broker_url.clone(),
         site_id: "site_001".to_string(),
         log_level: "info".to_string(),
+        gateway_credentials: None,
     };
     let cancel = CancellationToken::new();
     let gateway_handle = {
@@ -274,6 +275,7 @@ async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result
         broker_url: broker_url.clone(),
         site_id: "site_001".to_string(),
         log_level: "info".to_string(),
+        gateway_credentials: None,
     };
     let cancel = CancellationToken::new();
     let gateway_handle = {

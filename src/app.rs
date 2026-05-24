@@ -10,9 +10,10 @@
 //!    On respawn: cancel + join existing tasks, re-fetch spec, build new set.
 //! 6. On exit: disconnect MQTT cleanly.
 
+use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
 use crate::bacnet::client as bacnet;
-use crate::config::Config;
+use crate::config::{Config, GatewayCredentials};
 use crate::dnp3::client as dnp3;
 use crate::http::client::fetch_asyncapi;
 use crate::modbus::client as modbus;
@@ -50,6 +51,9 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // Fetch the spec first so we know which input topics to subscribe to.
     let initial_spec = fetch_asyncapi(&cfg.device_api_url).await?;
     info!(version = %initial_spec.info.version, "initial spec fetched");
+    // Fail-fast at boot if any device requires tls_mutual but mTLS creds are
+    // unconfigured. Security regression should be loud, not silent.
+    validate_trust_creds_alignment(&initial_spec, cfg.gateway_credentials.as_ref())?;
 
     // Synthetic-channel input topics. Subscribed alongside the beacon so the
     // single dispatcher routes both. Reconcile-time additions are NOT
@@ -89,6 +93,16 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                     }
                 };
                 info!(version = %fresh.info.version, "spec re-fetched");
+                if let Err(e) =
+                    validate_trust_creds_alignment(&fresh, cfg.gateway_credentials.as_ref())
+                {
+                    warn!(error = %e, "new spec fails trust/creds alignment; keeping current task set");
+                    let (h, c) =
+                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
+                    task_handles = h;
+                    task_cancel = c;
+                    continue;
+                }
                 let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone());
                 task_handles = h;
                 task_cancel = c;
@@ -145,6 +159,11 @@ fn spawn_task_set(
                 continue;
             }
             let binding = clone_binding(&source.binding);
+            // Reason: trust is per-device (x-device-trust[device_id]); clone
+            // into the task so the spawned future owns it for its full life.
+            let trust = spec.x_device_trust.get(device_id).cloned();
+            // Gateway credentials are global — same Option for every task.
+            let creds = cfg.gateway_credentials.clone();
             let topic_for_task = topic.clone();
             let client_for_task = client.clone();
             handles.spawn(async move {
@@ -154,6 +173,8 @@ fn spawn_task_set(
                     poll_rate,
                     client_for_task,
                     task_cancel,
+                    trust,
+                    creds,
                 )
                 .await;
             });
@@ -226,12 +247,15 @@ fn substitute_site_id(template: &str, site_id: &str) -> String {
 /// client, publishes the value to MQTT. On read error, logs warn and waits
 /// for the next tick (no double-retry — the protocol client already retries
 /// internally).
+#[allow(clippy::too_many_arguments)]
 async fn run_task(
     binding: ProtocolBinding,
     topic: String,
     poll_rate_hz: f64,
     client: paho_mqtt::AsyncClient,
     cancel: CancellationToken,
+    trust: Option<DeviceTrust>,
+    creds: Option<GatewayCredentials>,
 ) {
     let period = Duration::from_secs_f64(1.0 / poll_rate_hz);
     let mut ticker = interval(period);
@@ -240,7 +264,7 @@ async fn run_task(
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = ticker.tick() => {
-                match read_value(&binding).await {
+                match read_value(&binding, trust.as_ref(), creds.as_ref()).await {
                     Ok(value) => {
                         if let Err(e) =
                             publisher::publish_measurement(&client, &topic, value).await
@@ -256,14 +280,20 @@ async fn run_task(
 }
 
 /// Single-point protocol dispatch. Add a `match` arm when a new
-/// `ProtocolBinding` variant lands.
-async fn read_value(binding: &ProtocolBinding) -> Result<f64> {
+/// `ProtocolBinding` variant lands. `trust` carries the device's
+/// `x-device-trust` block (looked up by device_id at spawn time). `creds`
+/// is the gateway's global mTLS material (CA bundle + cert + key paths).
+async fn read_value(
+    binding: &ProtocolBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<f64> {
     match binding {
-        ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b).await,
-        ProtocolBinding::Snmp(b) => snmp::read_measurement(b).await,
-        ProtocolBinding::Redfish(b) => redfish::read_measurement(b).await,
-        ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b).await,
-        ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b).await,
+        ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b, trust, creds).await,
+        ProtocolBinding::Snmp(b) => snmp::read_measurement(b, trust, creds).await,
+        ProtocolBinding::Redfish(b) => redfish::read_measurement(b, trust, creds).await,
+        ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b, trust, creds).await,
+        ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b, trust, creds).await,
         // Synthetic channels are driven by `src/synthetic/` (own loop with
         // MQTT subscriptions + formula evaluation); never reached via the
         // single-point poll path. Unreachable acts as a tripwire if the
@@ -341,5 +371,101 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             object_instance: b.object_instance,
             property_id: b.property_id.clone(),
         }),
+    }
+}
+
+/// Boot/reconcile guard: every device declaring `tls_mutual` trust needs the
+/// gateway to have mTLS material configured. Fail-fast on misalignment so a
+/// missing mount isn't silently downgraded to plain TCP. Called once before
+/// the initial spawn and once per reconcile.
+fn validate_trust_creds_alignment(
+    spec: &AsyncApiSpec,
+    creds: Option<&GatewayCredentials>,
+) -> Result<()> {
+    if creds.is_some() {
+        return Ok(());
+    }
+    // Reason: only TLS-using variants need gateway_credentials; SNMPv3 USM
+    // is HMAC-based and authenticates via env-var passphrases, not PKI.
+    let offender = spec
+        .x_device_trust
+        .iter()
+        .find(|(_, trust)| matches!(trust, DeviceTrust::TlsMutual { .. }))
+        .map(|(device_id, _)| device_id);
+    if let Some(device_id) = offender {
+        anyhow::bail!(
+            "device {device_id} requires tls_mutual but gateway_credentials is unset; \
+             mount the CA bundle + gateway cert/key and set cfg.gateway_credentials",
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    /// Minimal spec helper — fills in mandatory fields, lets the caller hand
+    /// us just the trust block under test.
+    fn spec_with_trust(trust: HashMap<String, DeviceTrust>) -> AsyncApiSpec {
+        let json = r#"{
+            "info": { "version": "v1" },
+            "x-protocol-source": {}
+        }"#;
+        let mut spec: AsyncApiSpec = serde_json::from_str(json).unwrap();
+        spec.x_device_trust = trust;
+        spec
+    }
+
+    fn creds() -> GatewayCredentials {
+        GatewayCredentials {
+            ca_bundle_path: PathBuf::from("/etc/secrets/ca.crt"),
+            cert_path: PathBuf::from("/etc/secrets/gw.crt"),
+            key_path: PathBuf::from("/etc/secrets/gw.key"),
+        }
+    }
+
+    #[test]
+    fn validate_errors_when_tls_required_but_creds_absent() {
+        // Arrange — one device asks for TLS, gateway has no creds.
+        let mut trust = HashMap::new();
+        trust.insert(
+            "meter_01".to_string(),
+            DeviceTrust::TlsMutual {
+                subject_name: "meter-01".into(),
+            },
+        );
+        let spec = spec_with_trust(trust);
+        // Act
+        let result = validate_trust_creds_alignment(&spec, None);
+        // Assert — fail-fast with a clear error mentioning the device
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("meter_01"),
+            "error should name the offending device, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_ok_when_tls_required_and_creds_present() {
+        let mut trust = HashMap::new();
+        trust.insert(
+            "meter_01".to_string(),
+            DeviceTrust::TlsMutual {
+                subject_name: "meter-01".into(),
+            },
+        );
+        let spec = spec_with_trust(trust);
+        let creds = creds();
+        assert!(validate_trust_creds_alignment(&spec, Some(&creds)).is_ok());
+    }
+
+    #[test]
+    fn validate_ok_when_no_tls_required_and_creds_absent() {
+        // Back-compat: pre-PKI spec (empty trust block) should not require creds.
+        let spec = spec_with_trust(HashMap::new());
+        assert!(validate_trust_creds_alignment(&spec, None).is_ok());
     }
 }

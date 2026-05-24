@@ -1,8 +1,13 @@
-//! Modbus TCP client + decode helpers.
+//! Modbus TCP / Modbus Security (TLS+Role) client + decode helpers.
 
+use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ModbusTcpBinding;
+use crate::config::GatewayCredentials;
+use crate::modbus::tls;
 use anyhow::{Context, Result};
-use rodbus::client::{HostAddr, RequestParam, spawn_tcp_client_task};
+use rodbus::client::{
+    Channel, HostAddr, RequestParam, spawn_tcp_client_task, spawn_tls_client_task,
+};
 use rodbus::{AddressRange, UnitId};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -10,17 +15,35 @@ use tracing::warn;
 
 /// Attempts to retry on transient "no connection to server" — rodbus channels
 /// reconnect in the background and the first read can race with the initial
-/// TCP handshake.
+/// TCP / TLS handshake.
 const MAX_READ_ATTEMPTS: u32 = 5;
 
 /// Full read pipeline for a Modbus measurement: connect → read 2 holding
 /// registers → decode int32 high_low → apply scale/offset.
-pub async fn read_measurement(b: &ModbusTcpBinding) -> Result<f64> {
+///
+/// `trust` carries the device's `x-device-trust` block. `creds` is the
+/// gateway's global mTLS material. `Some(TlsMutual{..})` + `Some(creds)`
+/// dials Modbus Security (CA-validated mTLS + Role extension authz, per
+/// Modbus Security spec). Anything else falls back to plain Modbus/TCP.
+///
+/// The gateway's client cert (at `creds.cert_path`) must carry the Modbus
+/// Role extension (OID 1.3.6.1.4.1.50316.802.1) — the CA / issuance flow
+/// owns that, not this code.
+pub async fn read_measurement(
+    b: &ModbusTcpBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<f64> {
     let unit_id: u8 = b
         .unit_id
         .parse()
         .context("unit_id must parse to u8 for Modbus")?;
-    let words = read_holding(&b.host, b.port, unit_id, b.address, 2).await?;
+    let words = match (trust, creds) {
+        (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
+            read_holding_tls(&b.host, b.port, unit_id, b.address, 2, subject_name, creds).await?
+        }
+        _ => read_holding(&b.host, b.port, unit_id, b.address, 2).await?,
+    };
     let raw = decode_int32(&words, WordOrder::HighLow);
     Ok(apply_scale_offset(raw, b.scale, b.offset))
 }
@@ -34,7 +57,7 @@ pub enum WordOrder {
     LowHigh,
 }
 
-/// Connect over TCP and read `count` holding registers starting at `addr`.
+/// Connect over plain TCP and read `count` holding registers starting at `addr`.
 pub async fn read_holding(
     host: &str,
     port: u16,
@@ -42,15 +65,55 @@ pub async fn read_holding(
     addr: u16,
     count: u16,
 ) -> Result<Vec<u16>> {
-    let mut channel = spawn_tcp_client_task(
+    let channel = spawn_tcp_client_task(
         HostAddr::dns(host.to_string(), port),
         1,
         rodbus::default_retry_strategy(),
         rodbus::DecodeLevel::default(),
         None,
     );
-    channel.enable().await.context("modbus channel enable")?;
+    read_with_channel(channel, unit_id, addr, count).await
+}
 
+/// Connect over Modbus Security (TLS) and read `count` holding registers.
+/// Subject name + creds drive `TlsClientConfig::full_pki` — the device's cert
+/// must chain to the configured CA AND present a SAN/CN matching `subject_name`.
+#[allow(clippy::too_many_arguments)]
+pub async fn read_holding_tls(
+    host: &str,
+    port: u16,
+    unit_id: u8,
+    addr: u16,
+    count: u16,
+    subject_name: &str,
+    creds: &GatewayCredentials,
+) -> Result<Vec<u16>> {
+    let tls_config = tls::build_tls_config(
+        subject_name,
+        &creds.ca_bundle_path,
+        &creds.cert_path,
+        &creds.key_path,
+    )?;
+    let channel = spawn_tls_client_task(
+        HostAddr::dns(host.to_string(), port),
+        1,
+        rodbus::default_retry_strategy(),
+        tls_config,
+        rodbus::DecodeLevel::default(),
+        None,
+    );
+    read_with_channel(channel, unit_id, addr, count).await
+}
+
+/// Enable + read loop. Shared by plain + TLS paths — only the channel source
+/// differs. Retries on transient errors per `MAX_READ_ATTEMPTS`.
+async fn read_with_channel(
+    mut channel: Channel,
+    unit_id: u8,
+    addr: u16,
+    count: u16,
+) -> Result<Vec<u16>> {
+    channel.enable().await.context("modbus channel enable")?;
     let range = AddressRange::try_from(addr, count)
         .map_err(|e| anyhow::anyhow!("invalid modbus address range: {e}"))?;
     let param = RequestParam::new(UnitId::new(unit_id), Duration::from_secs(5));

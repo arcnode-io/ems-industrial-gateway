@@ -5,6 +5,7 @@
 //! look. `Validate` is used only on the top-level metadata block; per-binding
 //! fields are enforced at parse time by serde's typed deserialization.
 
+use crate::asyncapi::trust::DeviceTrust;
 use serde::Deserialize;
 use std::collections::HashMap;
 use validator::Validate;
@@ -19,6 +20,11 @@ pub struct AsyncApiSpec {
     /// Per-device, per-measurement protocol bindings + channel meta.
     #[serde(rename = "x-protocol-source")]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolSource>>,
+    /// Per-device mutual-auth trust material (pinned cert / USM creds /
+    /// `none`). Keyed by device_id, parallel to `x-protocol-source`. Empty if
+    /// the spec was emitted by a pre-trust device-api (default = no trust).
+    #[serde(rename = "x-device-trust", default)]
+    pub x_device_trust: HashMap<String, DeviceTrust>,
 }
 
 /// One x-protocol-source entry: a protocol binding plus the channel-level
@@ -217,6 +223,33 @@ mod tests {
         };
         assert_eq!(b.variation, Some(5));
         assert_eq!(b.point_index, 10);
+    }
+
+    #[test]
+    fn asyncapi_spec_carries_x_device_trust_block() {
+        // Arrange — minimal spec with one device's trust block alongside its
+        // protocol source. Device-api emits both blocks side-by-side.
+        let json = r#"{
+            "info": { "version": "v1" },
+            "x-protocol-source": {},
+            "x-device-trust": {
+                "meter_01": {
+                    "trust_mode": "tls_mutual",
+                    "subject_name": "meter-01.acme-site.local"
+                }
+            }
+        }"#;
+        // Act
+        let spec: AsyncApiSpec = serde_json::from_str(json).unwrap();
+        // Assert — trust entry keyed by device_id, TlsMutual variant
+        let trust = spec
+            .x_device_trust
+            .get("meter_01")
+            .expect("trust for meter_01");
+        let crate::asyncapi::trust::DeviceTrust::TlsMutual { subject_name } = trust else {
+            panic!("expected TlsMutual variant");
+        };
+        assert_eq!(subject_name, "meter-01.acme-site.local");
     }
 
     #[test]
