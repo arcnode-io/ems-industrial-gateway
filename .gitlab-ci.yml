@@ -25,6 +25,18 @@ check:
         docker ps -aq --filter "ancestor=public.ecr.aws/y1d2j6a8/$img" | xargs -r docker rm -f
       done
     - docker network rm gateway-e2e 2>/dev/null || true
+    # Pre-pull all e2e images so testcontainers' startup-timeout window only
+    # has to cover binary startup, not network image fetch. Saves up to a
+    # minute per image on a cold runner; turns "container startup timeout"
+    # flakes into instant errors.
+    - >-
+      for img in mock-modbus-server mock-snmp-agent mock-redfish-service
+      mock-dnp3-outstation mock-bacnet-device ems-device-api; do
+        docker pull public.ecr.aws/y1d2j6a8/$img:latest &
+      done
+      docker pull postgres:15 &
+      docker pull hivemq/hivemq-ce:latest &
+      wait
   script:
     - cargo cmd checks
     - cargo nextest run --lib --no-default-features --profile ci --cargo-profile dev --target x86_64-unknown-linux-gnu
