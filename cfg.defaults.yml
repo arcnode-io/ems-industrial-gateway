@@ -1,11 +1,13 @@
 local:
   device_api_url: http://localhost:3000
   broker_url: tcp://localhost:1883
+  mqtt_username: arcnode_gateway
   site_id: site_001
   log_level: info
 
 beta:
   device_api_url: http://device-api:3000
   broker_url: tcp://hivemq:1883
+  mqtt_username: arcnode_gateway
   site_id: arcnode_beta
   log_level: info

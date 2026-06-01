@@ -57,6 +57,35 @@ pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
     Ok(c)
 }
 
+/// Spin up the platform's custom ems-hivemq image (HiveMQ CE + File RBAC
+/// extension, Allow-All stripped). Caller mounts `credentials.xml` at the
+/// extension's expected path via `--volume`. Used by the broker-auth test
+/// to exercise the gateway's authenticated connect + ACL-enforced topics.
+pub async fn start_ems_hivemq_with_credentials(
+    credentials_path: &std::path::Path,
+) -> anyhow::Result<ContainerAsync<GenericImage>> {
+    use testcontainers::core::Mount;
+    let abs = credentials_path
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("canonicalize credentials: {e}"))?;
+    let abs_str = abs
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-utf8 path"))?;
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/ems-hivemq", "latest")
+        .with_wait_for(WaitFor::message_on_stdout(
+            "Started TCP Listener on address 0.0.0.0 and on port 1883.",
+        ))
+        .with_mapped_port(0, ContainerPort::Tcp(1883))
+        .with_mount(Mount::bind_mount(
+            abs_str,
+            "/opt/hivemq/extensions/hivemq-file-rbac-extension/conf/credentials.xml",
+        ))
+        .with_startup_timeout(STARTUP_TIMEOUT)
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up mock-modbus-server. Not on the shared network — gateway reaches it
 /// from the host via mapped port.
 pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<GenericImage>> {

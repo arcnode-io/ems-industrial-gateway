@@ -101,9 +101,18 @@ async fn gateway_polls_snmpv3_usm_agent_and_publishes_to_mqtt() -> Result<()> {
         format!("sites/{SITE_ID}/devices/{DEVICE_ID}/measurements/{MEASUREMENT}/{UNIT}");
     subscriber.subscribe(&expected_topic, 0).await?;
 
+    // Broker auth: set the env var the gateway loads. Tests use anonymous
+
+    // hivemq so any value works; this just satisfies the env-required check.
+
+    unsafe {
+        std::env::set_var("MQTT_GATEWAY_PASSWORD", "test");
+    }
+
     let cfg = Config {
         device_api_url: stub.uri(),
         broker_url: broker_url.clone(),
+        mqtt_username: "arcnode_gateway".to_string(),
         site_id: SITE_ID.to_string(),
         log_level: "info".to_string(),
         // No PKI material for SNMP — USM is HMAC+symmetric, gated on env-var

@@ -79,9 +79,15 @@ async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result
     sub.subscribe(&output_topic, 0).await?;
 
     // Spawn the gateway.
+    // Broker auth: set the env var the gateway loads. Tests use anonymous
+    // hivemq so any value works; this just satisfies the env-required check.
+    unsafe {
+        std::env::set_var("MQTT_GATEWAY_PASSWORD", "test");
+    }
     let cfg = Config {
         device_api_url,
         broker_url: broker_url.clone(),
+        mqtt_username: "arcnode_gateway".to_string(),
         site_id: "site_001".to_string(),
         log_level: "info".to_string(),
         gateway_credentials: None,

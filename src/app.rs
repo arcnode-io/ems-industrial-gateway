@@ -48,7 +48,17 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         "gateway starting",
     );
 
-    let mut client = publisher::connect(&cfg.broker_url, "ems-industrial-gateway").await?;
+    // Password is a SECRET — env-loaded, never in cfg.yml. Username comes
+    // from cfg (static `arcnode_gateway` per platform File-RBAC).
+    let mqtt_password = std::env::var("MQTT_GATEWAY_PASSWORD")
+        .context("MQTT_GATEWAY_PASSWORD env var unset — broker auth requires it")?;
+    let mut client = publisher::connect(
+        &cfg.broker_url,
+        "ems-industrial-gateway",
+        &cfg.mqtt_username,
+        &mqtt_password,
+    )
+    .await?;
     // Fetch the spec first so we know which input topics to subscribe to.
     let initial_spec = fetch_asyncapi(&cfg.device_api_url).await?;
     info!(version = %initial_spec.info.version, "initial spec fetched");

@@ -29,6 +29,9 @@ pub struct Config {
     pub device_api_url: String,
     /// MQTT broker URL (e.g. `tcp://hivemq:1883`).
     pub broker_url: String,
+    /// MQTT username (static across deployments — `arcnode_gateway` per platform
+    /// File-RBAC). Password is the env-var secret `MQTT_GATEWAY_PASSWORD`.
+    pub mqtt_username: String,
     /// Site identifier used in MQTT topic paths (`sites/{site_id}/...`).
     pub site_id: String,
     /// Log verbosity: `error | warn | info | debug`.
@@ -113,11 +116,13 @@ mod tests {
 local:
   device_api_url: http://localhost:3000
   broker_url: tcp://localhost:1883
+  mqtt_username: arcnode_gateway
   site_id: site_001
   log_level: info
 beta:
   device_api_url: http://device-api:3000
   broker_url: tcp://hivemq:1883
+  mqtt_username: arcnode_gateway
   site_id: arcnode_beta
   log_level: info
 "#;
