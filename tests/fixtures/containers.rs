@@ -177,6 +177,13 @@ pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> 
             "DOCUMENT_URL",
             "postgres://postgres:test@postgres:5432/postgres",
         )
+        // device-api gained an auth module (backend spec-alarms work) that
+        // hard-requires these 4 at boot — operator/viewer login passwords +
+        // their broker creds. Test values; real ones are deploy secrets.
+        .with_env_var("AUTH_OPERATOR_PW", "test-operator-pw")
+        .with_env_var("AUTH_VIEWER_PW", "test-viewer-pw")
+        .with_env_var("MQTT_OPERATOR_PASSWORD", "test-operator-pw")
+        .with_env_var("MQTT_VIEWER_PASSWORD", "test-viewer-pw")
         .with_network(NETWORK)
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
