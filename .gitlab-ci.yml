@@ -25,6 +25,11 @@ check:
         docker ps -aq --filter "ancestor=public.ecr.aws/y1d2j6a8/$img" | xargs -r docker rm -f
       done
     - docker network rm gateway-e2e 2>/dev/null || true
+    # Refresh ECR Public auth before the pre-pull. The runner is shared with
+    # jobs that `docker login public.ecr.aws` to push; once that cached token
+    # expires (12h), docker sends the stale token instead of falling back to
+    # anonymous and every pull dies with "authorization token has expired".
+    - aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
     # Pre-pull all e2e images so testcontainers' startup-timeout window only
     # has to cover binary startup, not network image fetch. Saves up to a
     # minute per image on a cold runner; turns "container startup timeout"
