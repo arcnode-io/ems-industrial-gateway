@@ -63,7 +63,9 @@ build:
     # key; platform-api's portal links it. Public-read via the gateway/* bucket
     # policy prefix.
     - docker save public.ecr.aws/y1d2j6a8/ems-industrial-gateway:latest | gzip > ems-industrial-gateway-latest.tar.gz
+    - sha256sum ems-industrial-gateway-latest.tar.gz > ems-industrial-gateway-latest.tar.gz.sha256
     - aws s3 cp ems-industrial-gateway-latest.tar.gz s3://arcnode-public/gateway/ems-industrial-gateway-latest.tar.gz
+    - aws s3 cp ems-industrial-gateway-latest.tar.gz.sha256 s3://arcnode-public/gateway/ems-industrial-gateway-latest.tar.gz.sha256
   only:
     - main
 

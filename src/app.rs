@@ -49,9 +49,15 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     );
 
     // Password is a SECRET — env-loaded, never in cfg.yml. Username comes
-    // from cfg (static `arcnode_gateway` per platform File-RBAC).
-    let mqtt_password = std::env::var("MQTT_GATEWAY_PASSWORD")
-        .context("MQTT_GATEWAY_PASSWORD env var unset — broker auth requires it")?;
+    // from cfg (static `arcnode_gateway` per platform File-RBAC). On-prem
+    // cloud-customer deployments don't set the env var — the gateway fetches
+    // it from the stack's Secrets Manager entry instead (AWS env creds).
+    let mqtt_password = match std::env::var("MQTT_GATEWAY_PASSWORD") {
+        Ok(pw) => pw,
+        Err(_) => crate::bootstrap::fetch_gateway_password()
+            .await
+            .context("MQTT_GATEWAY_PASSWORD unset — broker auth requires it")?,
+    };
     let mut client = publisher::connect(
         &cfg.broker_url,
         "ems-industrial-gateway",

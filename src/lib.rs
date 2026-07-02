@@ -5,6 +5,7 @@ pub mod app;
 pub mod asyncapi;
 pub mod bacnet;
 pub mod bacnet_sc;
+pub mod bootstrap;
 pub mod config;
 pub mod dnp3;
 pub mod http;

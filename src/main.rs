@@ -1,13 +1,18 @@
 //! Binary entry: load cfg, init tracing, run the gateway until SIGINT/SIGTERM.
 
-use ems_industrial_gateway::{app, config::load_config};
+use ems_industrial_gateway::{app, bootstrap, config::load_config};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
-    let cfg = load_config()?;
+    // On-prem cloud-customer path: ARCNODE_STACK_NAME + AWS env creds →
+    // self-configure from the stack's outputs. Otherwise the file loader.
+    let cfg = match bootstrap::config_from_stack().await? {
+        Some(cfg) => cfg,
+        None => load_config()?,
+    };
     tracing_subscriber::fmt()
         .with_target(false)
         .with_max_level(match cfg.log_level.as_str() {

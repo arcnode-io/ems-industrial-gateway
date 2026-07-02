@@ -110,6 +110,7 @@ src/
 ├── main.rs              # tokio entry, init tracing, wire SIGINT/SIGTERM → cancel
 ├── lib.rs               # crate library surface (used by integration tests)
 ├── app.rs               # orchestration: subscribe → fetch → spawn per-channel tasks → reconcile on beacon
+├── bootstrap.rs         # on-prem self-config from the customer's CFN stack (AWS env creds)
 ├── config.rs            # cfg.yml deserialize
 ├── asyncapi/
 │   ├── mod.rs
@@ -154,6 +155,37 @@ cargo run
 ```
 
 Cfg picks `local:` block from `cfg.yml` by default; `ENV=beta cargo run` switches to `beta:`. Gateway runs until SIGINT (Ctrl-C) or SIGTERM.
+
+## On-prem deployment (cloud customers)
+
+Cloud customers run the gateway on their plant network; it dials the
+cloud-hosted broker. They download the docker tarball from the delivery
+portal and run it with AWS env creds — the container self-configures from
+their CFN stack (no hand-edited cfg, no setup script):
+
+```bash
+docker load -i ems-industrial-gateway-latest.tar.gz
+docker run -d --restart unless-stopped \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID=... \
+  -e AWS_SECRET_ACCESS_KEY=... \
+  -e ARCNODE_STACK_NAME=<their-stack-name> \
+  public.ecr.aws/y1d2j6a8/ems-industrial-gateway:latest
+```
+
+When `ARCNODE_STACK_NAME` is set, `bootstrap.rs`:
+
+1. reads the stack outputs — `SiteId`, `BrokerWsUrl` (nginx-proxied
+   MQTT-over-WebSocket), `DeviceApiUrl`, `GatewaySecretName` — the contract
+   rendered by platform-api's `CfnService`
+2. fetches the broker password from the stack's Secrets Manager entry
+3. merges those over the baked `cfg.defaults.yml` beta block and boots
+
+The AWS credentials need `cloudformation:DescribeStacks` on the stack and
+`secretsmanager:GetSecretValue` on `arcnode-ems-<stack>/mqtt-gateway-password`.
+Missing outputs or bad creds fail loud at boot — no retry-looping a
+misconfiguration. Without `ARCNODE_STACK_NAME` the normal
+`cfg.defaults.yml` + `CFG_CUSTOMER_PATH` path applies (compose deployments).
 
 ## Run the integration test
 
