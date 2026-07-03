@@ -128,7 +128,12 @@ pub async fn handle_command(
     }
 }
 
-/// Publish one lifecycle event at QoS 1.
+/// Publish one lifecycle event at QoS 1, RETAINED. dispatch_state is a state
+/// topic: the HMI subscribes when the operator confirms — milliseconds AFTER
+/// the command publish — and the gateway's acks beat its SUBACK. Retained
+/// delivery hands the late subscriber the latest state immediately (and a
+/// mid-dispatch page refresh recovers it); the HMI's command_id correlation
+/// discards stale events from prior commands.
 async fn publish_event(
     client: &AsyncClient,
     topic: &str,
@@ -137,7 +142,7 @@ async fn publish_event(
     reason: Option<&str>,
 ) -> Result<()> {
     let payload = event_payload(&chrono::Utc::now().to_rfc3339(), command_id, phase, reason);
-    let msg = paho_mqtt::Message::new(topic, payload, EVENT_QOS);
+    let msg = paho_mqtt::Message::new_retained(topic, payload, EVENT_QOS);
     client
         .publish(msg)
         .await

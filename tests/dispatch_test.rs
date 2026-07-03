@@ -160,3 +160,47 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
     gateway.disconnect(None).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result<()> {
+    // Arrange — gateway handles a command BEFORE anyone subscribes (the HMI
+    // subscribes on confirm, ms after publishing — its SUBACK loses the race).
+    let broker = start_ems_hivemq_with_credentials(&credentials_path()).await?;
+    let port = broker.get_host_port_ipv4(1883).await?;
+    let url = format!("tcp://localhost:{port}");
+    let mut gateway =
+        publisher::connect(&url, "dispatch-test-gw3", "arcnode_gateway", "test").await?;
+    let _beacon_rx = subscriber::subscribe(
+        &mut gateway,
+        &[],
+        new_input_cache(),
+        SITE,
+        Arc::new(RwLock::new(BTreeSet::from(["dev_known".to_string()]))),
+    )
+    .await?;
+    let mut operator =
+        publisher::connect(&url, "dispatch-test-op3", "arcnode_operator", "test").await?;
+
+    // Act — command published with NO events subscription in place.
+    operator
+        .publish(Message::new(
+            COMMAND_TOPIC,
+            r#"{"ts":"2026-07-03T00:00:00Z","value":9,"command_id":"cmd-late"}"#,
+            1,
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(800)).await; // let both acks land
+    let mut events_stream = operator.get_stream(16);
+    operator
+        .subscribe("sites/site_001/devices/dev_known/events/dispatch_state", 1)
+        .await?;
+    let acks = collect_events(&mut events_stream, 1).await?;
+
+    // Assert — the retained terminal state arrives despite subscribing late.
+    assert_eq!(acks[0].0, "done");
+    assert_eq!(acks[0].1, "cmd-late");
+
+    operator.disconnect(None).await?;
+    gateway.disconnect(None).await?;
+    Ok(())
+}
