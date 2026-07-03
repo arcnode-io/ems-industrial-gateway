@@ -7,6 +7,7 @@ pub mod bacnet;
 pub mod bacnet_sc;
 pub mod bootstrap;
 pub mod config;
+pub mod dispatch;
 pub mod dnp3;
 pub mod http;
 pub mod modbus;

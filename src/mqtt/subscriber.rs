@@ -7,12 +7,16 @@
 //! reconciler); per-channel FloatSample messages write into the shared
 //! `InputCache` for synthetic tasks to read on their next tick.
 
+use crate::dispatch;
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use paho_mqtt::AsyncClient;
 use serde::Deserialize;
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tracing::{info, trace, warn};
 
@@ -23,6 +27,8 @@ const TOPIC_TOPOLOGY_CHANGED: &str = "system/topology_changed";
 const BEACON_QOS: i32 = 1;
 /// QoS for measurement-channel subscriptions; matches ADR-002 §11 (measurements at QoS 0).
 const MEASUREMENT_QOS: i32 = 0;
+/// QoS for the commands/ subscription — at-least-once per ADR-002 §11.
+const COMMAND_QOS: i32 = 1;
 /// Size of the paho stream buffer. 1024 covers high-rate measurements + beacons.
 const STREAM_CAPACITY: usize = 1024;
 
@@ -46,12 +52,21 @@ pub async fn subscribe(
     client: &mut AsyncClient,
     input_topics: &[String],
     cache: InputCache,
+    site_id: &str,
+    known_devices: Arc<RwLock<BTreeSet<String>>>,
 ) -> Result<watch::Receiver<u64>> {
     let mut stream = client.get_stream(STREAM_CAPACITY);
     client
         .subscribe(TOPIC_TOPOLOGY_CHANGED, BEACON_QOS)
         .await
         .context("subscribe to system/topology_changed")?;
+    // Dispatch commands (HMI operator → gateway). Acked on
+    // events/dispatch_state by dispatch::handle_command.
+    let commands_filter = format!("sites/{site_id}/devices/+/commands/#");
+    client
+        .subscribe(&commands_filter, COMMAND_QOS)
+        .await
+        .with_context(|| format!("subscribe to {commands_filter}"))?;
     for topic in input_topics {
         client
             .subscribe(topic, MEASUREMENT_QOS)
@@ -64,6 +79,8 @@ pub async fn subscribe(
     );
 
     let (tx, rx) = watch::channel(0u64);
+    let event_client = client.clone();
+    let site = site_id.to_string();
     tokio::spawn(async move {
         let mut beacon_count = 0u64;
         while let Some(msg_opt) = stream.next().await {
@@ -79,6 +96,19 @@ pub async fn subscribe(
                 // Receiver dropped means main loop is shutting down — exit quietly.
                 if tx.send(beacon_count).is_err() {
                     break;
+                }
+            } else if msg.topic().contains("/commands/") {
+                let devices = known_devices.read().await;
+                if let Err(err) = dispatch::handle_command(
+                    &event_client,
+                    &site,
+                    &devices,
+                    msg.topic(),
+                    msg.payload(),
+                )
+                .await
+                {
+                    warn!(topic = %msg.topic(), error = %err, "dispatch ack publish failed");
                 }
             } else {
                 cache_float_sample(&cache, msg.topic(), msg.payload());

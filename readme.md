@@ -28,6 +28,27 @@ Five south-side protocols plus a north-side derivation engine:
 | BACnet/IP | bacnet-rs | UDP 47808, single ReadProperty; devices behind a BACnet router (Loytec, Easy/IO, ABB) cover MS-TP transparently |
 | Synthetic | — | Pure-function derivations over cached MQTT inputs. See [Synthetic Derivations](#synthetic-derivations). |
 
+## Dispatch
+
+The gateway is the consumer half of the dispatch contract. The HMI (operator
+role) publishes a command frame to
+`sites/{site}/devices/{dev}/commands/{verb}/{target}/{unit}`:
+
+```json
+{ "ts": "...", "value": 1620000, "command_id": "..." }
+```
+
+and the gateway acks the lifecycle on
+`sites/{site}/devices/{dev}/events/dispatch_state` with
+`{ ts, command_id, phase: "received"|"done"|"failed", reason? }`.
+
+`done` means **accepted, not ramped** (locked contract, ems-hmi
+`dispatchEvents.ts`). v1 acceptance = the device exists in the current
+AsyncAPI spec; the DTM schema carries no writable command bindings yet, so
+there is no south-side write. When command bindings land, the write happens
+between `received` and `done`. Ghost devices → `failed` with a reason;
+frames without a `command_id` are dropped (nothing to correlate).
+
 ## Synthetic Derivations
 
 Some measurements aren't read off a south-side device — they're computed by
@@ -111,6 +132,7 @@ src/
 ├── lib.rs               # crate library surface (used by integration tests)
 ├── app.rs               # orchestration: subscribe → fetch → spawn per-channel tasks → reconcile on beacon
 ├── bootstrap.rs         # on-prem self-config from the customer's CFN stack (AWS env creds)
+├── dispatch.rs          # command consumer: commands/# → received|done|failed acks on events/dispatch_state
 ├── config.rs            # cfg.yml deserialize
 ├── asyncapi/
 │   ├── mod.rs

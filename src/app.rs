@@ -24,7 +24,9 @@ use crate::snmp::client as snmp;
 use crate::synthetic::{self, Formula, InputCache, SyntheticTaskConfig};
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
@@ -78,7 +80,17 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // synthetic inputs need a gateway restart (logged + tracked in handoff).
     let input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
     let cache = synthetic::new_input_cache();
-    let mut beacon_rx = subscriber::subscribe(&mut client, &input_topics, cache.clone()).await?;
+    // Device set backing dispatch validation — refreshed on every successful
+    // spec re-fetch so accepts/rejects track live topology.
+    let known_devices = Arc::new(RwLock::new(device_ids(&initial_spec)));
+    let mut beacon_rx = subscriber::subscribe(
+        &mut client,
+        &input_topics,
+        cache.clone(),
+        &cfg.site_id,
+        known_devices.clone(),
+    )
+    .await?;
 
     let (mut task_handles, mut task_cancel) =
         spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
@@ -110,6 +122,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                     }
                 };
                 info!(version = %fresh.info.version, "spec re-fetched");
+                *known_devices.write().await = device_ids(&fresh);
                 if let Err(e) =
                     validate_trust_creds_alignment(&fresh, cfg.gateway_credentials.as_ref())
                 {
@@ -132,6 +145,11 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     client.disconnect(None).await.context("mqtt disconnect")?;
     info!("gateway stopped");
     Ok(())
+}
+
+/// Device ids the spec currently declares — the dispatch accept set.
+fn device_ids(spec: &AsyncApiSpec) -> BTreeSet<String> {
+    spec.x_protocol_source.keys().cloned().collect()
 }
 
 /// Walk the spec's x-protocol-source and spawn one task per
