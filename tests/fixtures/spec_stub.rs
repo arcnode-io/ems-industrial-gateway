@@ -48,6 +48,25 @@ pub fn build_spec_body(
     })
 }
 
+/// Spec body WITHOUT an x-device-trust block — plain-TCP protocol paths.
+/// (With a trust block and no gateway creds, app::run fails fast at boot
+/// by design; plain tests must not declare trust at all.)
+pub fn build_spec_body_plain(
+    device_id: &str,
+    measurement: &str,
+    unit: &str,
+    protocol_binding: Value,
+) -> Value {
+    json!({
+        "info": { "version": "v1" },
+        "x-protocol-source": {
+            device_id: {
+                measurement: merge_meta(unit, 1.0, protocol_binding),
+            }
+        }
+    })
+}
+
 /// Merge `unit` + `poll_rate_hz` into a binding object — what every
 /// `x-protocol-source[device][measurement]` entry needs alongside its
 /// protocol-specific fields.

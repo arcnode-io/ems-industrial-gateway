@@ -87,11 +87,17 @@ pub async fn start_ems_hivemq_with_credentials(
 }
 
 /// Spin up mock-modbus-server. Not on the shared network — gateway reaches it
-/// from the host via mapped port.
+/// from the host via mapped port. Waits for the CONTROL surface log line
+/// (fires after the modbus listener line, so both are up) — requires the
+/// post-control-surface image (fixtures f77bf48+); older images log
+/// "mock-modbus-server listening" and predate PUT /registers entirely.
 pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-modbus-server", "latest")
         .with_exposed_port(ContainerPort::Tcp(502))
-        .with_wait_for(WaitFor::message_on_stdout("mock-modbus-server listening"))
+        .with_exposed_port(ContainerPort::Tcp(8080))
+        .with_wait_for(WaitFor::message_on_stdout(
+            "mock-modbus-server control listening",
+        ))
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
