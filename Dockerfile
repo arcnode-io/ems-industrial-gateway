@@ -2,7 +2,7 @@
 # runtime is a slim debian with the static-ish ems-industrial-gateway
 # binary + the cfg.defaults.yml it reads at boot. Drops the image from ~600MB
 # (cargo install in slim-bookworm) to ~50MB (debian-slim + binary).
-FROM rust:1.95.0-slim-bookworm AS builder
+FROM rust:1.98-slim-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev cmake build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
