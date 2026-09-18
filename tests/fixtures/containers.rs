@@ -104,6 +104,23 @@ pub async fn start_mock_modbus_server() -> anyhow::Result<ContainerAsync<Generic
     Ok(c)
 }
 
+/// Spin up mock-modbus-server with function-code-16 writes enabled
+/// (`MODBUS_WRITABLE=1`). Same port/wait shape as `start_mock_modbus_server`
+/// — only write authorization differs; requires the post-writable-mode image.
+pub async fn start_mock_modbus_server_writable() -> anyhow::Result<ContainerAsync<GenericImage>> {
+    let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-modbus-server", "latest")
+        .with_exposed_port(ContainerPort::Tcp(502))
+        .with_exposed_port(ContainerPort::Tcp(8080))
+        .with_wait_for(WaitFor::message_on_stdout(
+            "mock-modbus-server control listening",
+        ))
+        .with_env_var("MODBUS_WRITABLE", "1")
+        .with_startup_timeout(STARTUP_TIMEOUT)
+        .start()
+        .await?;
+    Ok(c)
+}
+
 /// Spin up mock-snmp-agent. UDP 161 mapped; gateway reaches it via host port.
 pub async fn start_mock_snmp_agent() -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/mock-snmp-agent", "latest")

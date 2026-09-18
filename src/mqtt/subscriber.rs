@@ -7,13 +7,16 @@
 //! reconciler); per-channel FloatSample messages write into the shared
 //! `InputCache` for synthetic tasks to read on their next tick.
 
+use crate::asyncapi::trust::DeviceTrust;
+use crate::asyncapi::types::ProtocolBinding;
+use crate::config::GatewayCredentials;
 use crate::dispatch;
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use paho_mqtt::AsyncClient;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -48,12 +51,15 @@ struct FloatSample {
 ///
 /// Caller keeps the returned receiver to await topology changes; cache writes
 /// are observed by synthetic tasks polling the cache on their own tick.
+#[allow(clippy::too_many_arguments)]
 pub async fn subscribe(
     client: &mut AsyncClient,
     input_topics: &[String],
     cache: InputCache,
     site_id: &str,
-    known_devices: Arc<RwLock<BTreeSet<String>>>,
+    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+    device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    creds: Option<GatewayCredentials>,
 ) -> Result<watch::Receiver<u64>> {
     let mut stream = client.get_stream(STREAM_CAPACITY);
     client
@@ -98,11 +104,14 @@ pub async fn subscribe(
                     break;
                 }
             } else if msg.topic().contains("/commands/") {
-                let devices = known_devices.read().await;
+                let channels = device_channels.read().await;
+                let trust = device_trust.read().await;
                 if let Err(err) = dispatch::handle_command(
                     &event_client,
                     &site,
-                    &devices,
+                    &channels,
+                    &trust,
+                    creds.as_ref(),
                     msg.topic(),
                     msg.payload(),
                 )

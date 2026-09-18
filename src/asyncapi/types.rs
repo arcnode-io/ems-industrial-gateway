@@ -1,9 +1,13 @@
 //! Hand-rolled validated structs that mirror device-api's `/asyncapi` shape.
 //!
-//! Gateway only consumes a narrow slice (x-protocol-source bindings). When the
-//! spec shape changes, update these structs — the compiler tells you where to
-//! look. `Validate` is used only on the top-level metadata block; per-binding
-//! fields are enforced at parse time by serde's typed deserialization.
+//! Gateway consumes two sibling maps: x-protocol-source (measurements, keyed
+//! by channel name, drives the poll loop) and x-command-source (commands,
+//! keyed by channel name but resolved by their own verb+target fields — a
+//! command topic never carries the template's channel name, only
+//! `commands/{verb}/{target}/{unit}`). When the spec shape changes, update
+//! these structs — the compiler tells you where to look. `Validate` is used
+//! only on the top-level metadata block; per-binding fields are enforced at
+//! parse time by serde's typed deserialization.
 
 use crate::asyncapi::trust::DeviceTrust;
 use serde::Deserialize;
@@ -20,6 +24,11 @@ pub struct AsyncApiSpec {
     /// Per-device, per-measurement protocol bindings + channel meta.
     #[serde(rename = "x-protocol-source")]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolSource>>,
+    /// Per-device, per-command protocol bindings + verb/target identity.
+    /// Empty if the spec predates the command/measurement split (default =
+    /// no dispatchable commands).
+    #[serde(rename = "x-command-source", default)]
+    pub x_command_source: HashMap<String, HashMap<String, CommandSource>>,
     /// Per-device mutual-auth trust material (pinned cert / USM creds /
     /// `none`). Keyed by device_id, parallel to `x-protocol-source`. Empty if
     /// the spec was emitted by a pre-trust device-api (default = no trust).
@@ -37,6 +46,23 @@ pub struct ProtocolSource {
     /// Poll cadence per measurement; `None` means the DTM author omitted it
     /// and the gateway should apply its default (see `app.rs`).
     pub poll_rate_hz: Option<f64>,
+    /// The protocol binding itself; variant discriminated by `protocol`.
+    #[serde(flatten)]
+    pub binding: ProtocolBinding,
+}
+
+/// One x-command-source entry: a protocol binding plus the identity a
+/// `commands/{verb}/{target}/{unit}` topic carries — `verb`/`target` are
+/// real fields here because the topic never carries the template's own
+/// command name, only these two.
+#[derive(Debug, Deserialize)]
+pub struct CommandSource {
+    /// The command verb (e.g. `set`, `enable`).
+    pub verb: String,
+    /// The command target within the device (e.g. `active_power`).
+    pub target: String,
+    /// Engineering unit terminal segment for the MQTT topic.
+    pub unit: String,
     /// The protocol binding itself; variant discriminated by `protocol`.
     #[serde(flatten)]
     pub binding: ProtocolBinding,
@@ -224,6 +250,33 @@ mod tests {
         assert_eq!(b.operation, "subtract");
         assert_eq!(b.inputs.len(), 2);
         assert!(b.inputs[1].contains("bess_module_1"));
+    }
+
+    #[test]
+    fn deserialize_command_source_carries_verb_and_target() {
+        // Arrange — same shape device-api emits in x-command-source for
+        // bess_rack's set_active_power command.
+        let json = r#"{
+            "verb": "set",
+            "target": "active_power",
+            "unit": "watts",
+            "protocol": "modbus_tcp",
+            "host": "10.0.0.7",
+            "port": 502,
+            "unit_id": "1",
+            "address": 50,
+            "scale": 1.0,
+            "offset": 0.0
+        }"#;
+        // Act
+        let src: CommandSource = serde_json::from_str(json).unwrap();
+        // Assert
+        assert_eq!(src.verb, "set");
+        assert_eq!(src.target, "active_power");
+        let ProtocolBinding::ModbusTcp(b) = src.binding else {
+            panic!("expected ModbusTcp variant");
+        };
+        assert_eq!(b.address, 50);
     }
 
     #[test]

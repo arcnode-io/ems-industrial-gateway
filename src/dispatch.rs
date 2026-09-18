@@ -9,21 +9,28 @@
 //! { "ts": "...", "command_id": "...", "phase": "received|done|failed", "reason": "..." }
 //! ```
 //!
-//! Contract per ems-hmi `dispatchEvents.ts` (locked): `done` means the gateway
-//! ACCEPTED the setpoint — not that the device ramped. v1 acceptance =
-//! device exists in the current AsyncAPI spec; the DTM schema carries no
-//! writable command bindings yet, so there is no south-side write to perform.
-//! When command bindings land in the template schema, the write happens
-//! between `received` and `done` and a rejected write becomes `failed`.
+//! Contract per ems-hmi `dispatchEvents.ts` (locked): `done` means the
+//! south-side write succeeded — not that the device ramped or that the
+//! setpoint took physical effect. The command's binding is resolved from
+//! `x-command-source` (each entry carries `verb`+`target` explicitly, since
+//! the topic never carries the template's own command name); Modbus TCP
+//! bindings get a real write, every other protocol gets an explicit
+//! `failed` (unsupported, not a silent no-op). Unknown device, unknown
+//! command, and write errors all become `failed` too, with `reason` saying
+//! which.
 //!
 //! Frames without a `command_id` can't be correlated by the HMI, so they are
 //! logged and dropped rather than acked.
 
+use crate::asyncapi::trust::DeviceTrust;
+use crate::asyncapi::types::ProtocolBinding;
+use crate::config::GatewayCredentials;
+use crate::modbus::client as modbus;
 use anyhow::{Context, Result};
 use paho_mqtt::AsyncClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 /// QoS for dispatch lifecycle events — at-least-once, same as the commands
@@ -53,20 +60,41 @@ pub enum Phase {
     Failed,
 }
 
-/// Parse a commands/ topic into its device id, scoped to our site.
+/// Parsed identity of a commands/ topic: which device, and which command
+/// (verb + target — matched against each `x-command-source` entry's own
+/// `verb`/`target` fields, joined `{verb}_{target}` to key the lookup map).
+pub struct CommandTopic<'t> {
+    /// The device the command targets.
+    pub device_id: &'t str,
+    /// The command verb (e.g. `set`, `enable`).
+    pub verb: &'t str,
+    /// The command target within the device (e.g. `active_power`).
+    pub target: &'t str,
+}
+
+/// Parse a commands/ topic into device id + verb + target, scoped to our site.
 ///
-/// Topic shape (7 segments, system_adr §9):
-/// `sites/{site}/devices/{dev}/commands/{verb}/{target}/{unit}` — actually 8
-/// path segments including the unit terminal; we only require the prefix
-/// through `commands` and a non-empty device segment.
-pub fn parse_command_topic<'t>(topic: &'t str, site_id: &str) -> Option<&'t str> {
+/// Topic shape (system_adr §9):
+/// `sites/{site}/devices/{dev}/commands/{verb}/{target}/{unit}`.
+pub fn parse_command_topic<'t>(topic: &'t str, site_id: &str) -> Option<CommandTopic<'t>> {
     let mut parts = topic.split('/');
-    (parts.next() == Some("sites")
-        && parts.next() == Some(site_id)
-        && parts.next() == Some("devices"))
-    .then(|| parts.next())
-    .flatten()
-    .filter(|device| !device.is_empty() && parts.next() == Some("commands"))
+    if parts.next() != Some("sites")
+        || parts.next() != Some(site_id)
+        || parts.next() != Some("devices")
+    {
+        return None;
+    }
+    let device_id = parts.next().filter(|s| !s.is_empty())?;
+    if parts.next() != Some("commands") {
+        return None;
+    }
+    let verb = parts.next().filter(|s| !s.is_empty())?;
+    let target = parts.next().filter(|s| !s.is_empty())?;
+    Some(CommandTopic {
+        device_id,
+        verb,
+        target,
+    })
 }
 
 /// The events topic a device's dispatch acks ride on (mirrors the HMI's
@@ -90,19 +118,26 @@ pub fn event_payload(
 }
 
 /// Handle one inbound commands/ message end-to-end: parse → `received` →
-/// accept/reject → `done`/`failed`. Unknown-site or unparseable frames are
-/// logged and dropped (nothing to correlate an ack to).
+/// resolve binding → protocol write → `done`/`failed`. Unknown-site or
+/// unparseable frames are logged and dropped (nothing to correlate an ack
+/// to). `Phase::Done` means the write to the south-side device succeeded;
+/// `Phase::Failed` covers unknown device/command, unsupported protocol, and
+/// write errors alike.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_command(
     client: &AsyncClient,
     site_id: &str,
-    known_devices: &BTreeSet<String>,
+    device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
+    device_trust: &HashMap<String, DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
     topic: &str,
     payload: &[u8],
 ) -> Result<()> {
-    let Some(device_id) = parse_command_topic(topic, site_id) else {
+    let Some(cmd_topic) = parse_command_topic(topic, site_id) else {
         warn!(%topic, "command on unexpected topic; dropping");
         return Ok(());
     };
+    let device_id = cmd_topic.device_id;
     let frame: CommandFrame = match serde_json::from_slice(payload) {
         Ok(f) => f,
         Err(err) => {
@@ -112,19 +147,79 @@ pub async fn handle_command(
     };
     let events = event_topic(site_id, device_id);
     publish_event(client, &events, &frame.command_id, Phase::Received, None).await?;
-    if known_devices.contains(device_id) {
-        info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch accepted");
-        publish_event(client, &events, &frame.command_id, Phase::Done, None).await
-    } else {
+
+    let Some(channels) = device_channels.get(device_id) else {
         warn!(%device_id, command_id = %frame.command_id, "dispatch rejected — device not in spec");
-        publish_event(
+        return publish_event(
             client,
             &events,
             &frame.command_id,
             Phase::Failed,
             Some(&format!("unknown device {device_id}")),
         )
-        .await
+        .await;
+    };
+    let channel_key = format!("{}_{}", cmd_topic.verb, cmd_topic.target);
+    let Some(binding) = channels.get(&channel_key) else {
+        warn!(%device_id, %channel_key, command_id = %frame.command_id, "dispatch rejected — unknown command");
+        return publish_event(
+            client,
+            &events,
+            &frame.command_id,
+            Phase::Failed,
+            Some(&format!(
+                "unknown command {channel_key} for device {device_id}"
+            )),
+        )
+        .await;
+    };
+
+    match binding {
+        ProtocolBinding::ModbusTcp(b) => {
+            let trust = device_trust.get(device_id);
+            match modbus::write_setpoint(b, frame.value, trust, creds).await {
+                Ok(()) => {
+                    info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch write succeeded");
+                    publish_event(client, &events, &frame.command_id, Phase::Done, None).await
+                }
+                Err(err) => {
+                    warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch write failed");
+                    publish_event(
+                        client,
+                        &events,
+                        &frame.command_id,
+                        Phase::Failed,
+                        Some(&format!("modbus write failed: {err}")),
+                    )
+                    .await
+                }
+            }
+        }
+        other => {
+            let protocol = protocol_name(other);
+            warn!(%device_id, command_id = %frame.command_id, protocol, "dispatch rejected — unsupported protocol");
+            publish_event(
+                client,
+                &events,
+                &frame.command_id,
+                Phase::Failed,
+                Some(&format!("unsupported protocol for commands: {protocol}")),
+            )
+            .await
+        }
+    }
+}
+
+/// Human-readable protocol name for an unsupported-binding rejection reason.
+fn protocol_name(binding: &ProtocolBinding) -> &'static str {
+    match binding {
+        ProtocolBinding::ModbusTcp(_) => "modbus_tcp",
+        ProtocolBinding::Snmp(_) => "snmp",
+        ProtocolBinding::Redfish(_) => "redfish",
+        ProtocolBinding::Dnp3Tcp(_) => "dnp3_tcp",
+        ProtocolBinding::BacnetIp(_) => "bacnet_ip",
+        ProtocolBinding::BacnetSc(_) => "bacnet_sc",
+        ProtocolBinding::Synthetic(_) => "synthetic",
     }
 }
 
@@ -154,27 +249,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_device_from_command_topic() {
+    fn parses_device_verb_target_from_command_topic() {
         // Arrange
         let topic = "sites/s1/devices/bess_module_01/commands/set/active_power/watts";
-        // Act + Assert
-        assert_eq!(parse_command_topic(topic, "s1"), Some("bess_module_01"));
+        // Act
+        let parsed = parse_command_topic(topic, "s1").unwrap();
+        // Assert
+        assert_eq!(parsed.device_id, "bess_module_01");
+        assert_eq!(parsed.verb, "set");
+        assert_eq!(parsed.target, "active_power");
     }
 
     #[test]
     fn rejects_other_site_and_non_command_topics() {
         // Arrange + Act + Assert — wrong site
-        assert_eq!(
-            parse_command_topic("sites/other/devices/d/commands/set/x/w", "s1"),
-            None
-        );
+        assert!(parse_command_topic("sites/other/devices/d/commands/set/x/w", "s1").is_none());
         // measurements family is not a command
-        assert_eq!(
-            parse_command_topic("sites/s1/devices/d/measurements/x/w", "s1"),
-            None
-        );
-        // truncated topic
-        assert_eq!(parse_command_topic("sites/s1/devices", "s1"), None);
+        assert!(parse_command_topic("sites/s1/devices/d/measurements/x/w", "s1").is_none());
+        // truncated topic — missing device
+        assert!(parse_command_topic("sites/s1/devices", "s1").is_none());
+        // truncated topic — missing target
+        assert!(parse_command_topic("sites/s1/devices/d/commands/set", "s1").is_none());
     }
 
     #[test]

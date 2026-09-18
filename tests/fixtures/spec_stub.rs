@@ -82,6 +82,34 @@ fn merge_meta(unit: &str, poll_rate_hz: f64, mut binding: Value) -> Value {
     binding
 }
 
+/// Spec body for a single (device_id, command) binding under
+/// `x-command-source` — carries `verb`/`target` explicitly (no
+/// `poll_rate_hz`; commands aren't polled), no trust block. Mirrors
+/// device-api's `buildCommandSourceMap` projection.
+pub fn build_spec_body_command_plain(
+    device_id: &str,
+    verb: &str,
+    target: &str,
+    unit: &str,
+    mut protocol_binding: Value,
+) -> Value {
+    let map = protocol_binding
+        .as_object_mut()
+        .expect("binding must be a JSON object");
+    map.insert("verb".into(), Value::String(verb.to_string()));
+    map.insert("target".into(), Value::String(target.to_string()));
+    map.insert("unit".into(), Value::String(unit.to_string()));
+    json!({
+        "info": { "version": "v1" },
+        "x-protocol-source": {},
+        "x-command-source": {
+            device_id: {
+                format!("{verb}_{target}"): protocol_binding,
+            }
+        }
+    })
+}
+
 /// Modbus/TLS binding JSON pointed at `addr`. Reads holding register 4000
 /// with unit_id 1 (matches `modbus_security.rs` fixture).
 pub fn modbus_tls_binding(addr: SocketAddr) -> Value {

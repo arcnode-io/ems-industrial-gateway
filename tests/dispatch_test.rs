@@ -3,22 +3,26 @@
 //! Operator publishes a command frame → the gateway's subscriber demux routes
 //! it to dispatch::handle_command → the operator receives the lifecycle acks
 //! on events/dispatch_state. Asserts the locked HMI contract
-//! (dispatchEvents.ts): received → done for a spec-known device,
-//! received → failed(reason) for a ghost device.
+//! (dispatchEvents.ts): received → done for a device with a real Modbus
+//! write binding (write actually lands on the mock server), received →
+//! failed(reason) for a ghost device.
 
 mod fixtures;
 
 use anyhow::Result;
+use ems_industrial_gateway::asyncapi::types::{ModbusTcpBinding, ProtocolBinding};
 use ems_industrial_gateway::mqtt::{publisher, subscriber};
 use ems_industrial_gateway::synthetic::new_input_cache;
-use fixtures::containers::start_ems_hivemq_with_credentials;
+use fixtures::containers::{start_ems_hivemq_with_credentials, start_mock_modbus_server_writable};
 use futures::stream::StreamExt;
 use paho_mqtt::Message;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use testcontainers::ContainerAsync;
+use testcontainers::GenericImage;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
@@ -30,6 +34,31 @@ const SITE: &str = "site_001";
 const COMMAND_TOPIC: &str = "sites/site_001/devices/dev_known/commands/set/active_power/watts";
 const GHOST_COMMAND_TOPIC: &str =
     "sites/site_001/devices/dev_ghost/commands/set/active_power/watts";
+
+/// Start a writable mock-modbus-server and build the `device_channels` map
+/// `dispatch::handle_command` needs: `dev_known.set_active_power` → a real
+/// Modbus write binding pointed at it. Caller must keep the returned
+/// container alive for the test's duration.
+async fn known_device_channels() -> Result<(
+    ContainerAsync<GenericImage>,
+    Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+)> {
+    let mock = start_mock_modbus_server_writable().await?;
+    let port = mock.get_host_port_ipv4(502).await?;
+    let binding = ProtocolBinding::ModbusTcp(ModbusTcpBinding {
+        host: "127.0.0.1".to_string(),
+        port,
+        unit_id: "1".to_string(),
+        address: 50,
+        scale: 1.0,
+        offset: 0.0,
+    });
+    let mut commands = HashMap::new();
+    commands.insert("set_active_power".to_string(), binding);
+    let mut channels = HashMap::new();
+    channels.insert("dev_known".to_string(), commands);
+    Ok((mock, Arc::new(RwLock::new(channels))))
+}
 
 /// Collect the next `n` dispatch events (phase, command_id, reason) from the
 /// operator's stream, with a per-event timeout.
@@ -55,20 +84,23 @@ async fn collect_events(
 
 #[tokio::test]
 async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Result<()> {
-    // Arrange — real File-RBAC broker; gateway subscriber with a known-device set.
+    // Arrange — real File-RBAC broker; gateway subscriber with a real
+    // writable Modbus binding for dev_known.
     let broker = start_ems_hivemq_with_credentials(&credentials_path()).await?;
     let port = broker.get_host_port_ipv4(1883).await?;
     let url = format!("tcp://localhost:{port}");
+    let (_mock, channels) = known_device_channels().await?;
 
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw", "arcnode_gateway", "test").await?;
-    let known: BTreeSet<String> = BTreeSet::from(["dev_known".to_string()]);
     let _beacon_rx = subscriber::subscribe(
         &mut gateway,
         &[],
         new_input_cache(),
         SITE,
-        Arc::new(RwLock::new(known)),
+        channels,
+        Arc::new(RwLock::new(HashMap::new())),
+        None,
     )
     .await?;
 
@@ -80,7 +112,7 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
         .subscribe("sites/site_001/devices/+/events/dispatch_state", 1)
         .await?;
 
-    // Act — dispatch to a device the spec knows.
+    // Act — dispatch to a device with a real Modbus write binding.
     operator
         .publish(Message::new(
             COMMAND_TOPIC,
@@ -90,7 +122,8 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
         .await?;
     let acks = collect_events(&mut events_stream, 2).await?;
 
-    // Assert — received → done, correlated to cmd-1 (contract: done = accepted).
+    // Assert — received → done, correlated to cmd-1 (contract: done = the
+    // south-side write succeeded).
     assert_eq!(acks[0], ("received".into(), "cmd-1".into(), None));
     assert_eq!(acks[1], ("done".into(), "cmd-1".into(), None));
 
@@ -129,6 +162,7 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
     let broker = start_ems_hivemq_with_credentials(&credentials_path()).await?;
     let port = broker.get_host_port_ipv4(1883).await?;
     let url = format!("tcp://localhost:{port}");
+    let (_mock, channels) = known_device_channels().await?;
 
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw2", "arcnode_gateway", "test").await?;
@@ -137,7 +171,9 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
         &[],
         new_input_cache(),
         SITE,
-        Arc::new(RwLock::new(BTreeSet::from(["dev_known".to_string()]))),
+        channels,
+        Arc::new(RwLock::new(HashMap::new())),
+        None,
     )
     .await?;
     let mut operator =
@@ -168,6 +204,7 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
     let broker = start_ems_hivemq_with_credentials(&credentials_path()).await?;
     let port = broker.get_host_port_ipv4(1883).await?;
     let url = format!("tcp://localhost:{port}");
+    let (_mock, channels) = known_device_channels().await?;
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw3", "arcnode_gateway", "test").await?;
     let _beacon_rx = subscriber::subscribe(
@@ -175,7 +212,9 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
         &[],
         new_input_cache(),
         SITE,
-        Arc::new(RwLock::new(BTreeSet::from(["dev_known".to_string()]))),
+        channels,
+        Arc::new(RwLock::new(HashMap::new())),
+        None,
     )
     .await?;
     let mut operator =

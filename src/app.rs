@@ -23,7 +23,7 @@ use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
 use crate::synthetic::{self, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -80,15 +80,18 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // synthetic inputs need a gateway restart (logged + tracked in handoff).
     let input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
     let cache = synthetic::new_input_cache();
-    // Device set backing dispatch validation — refreshed on every successful
-    // spec re-fetch so accepts/rejects track live topology.
-    let known_devices = Arc::new(RwLock::new(device_ids(&initial_spec)));
+    // Device/channel bindings backing dispatch — refreshed on every
+    // successful spec re-fetch so accepts/rejects/writes track live topology.
+    let device_channels_map = Arc::new(RwLock::new(device_channels(&initial_spec)));
+    let device_trust_map = Arc::new(RwLock::new(initial_spec.x_device_trust.clone()));
     let mut beacon_rx = subscriber::subscribe(
         &mut client,
         &input_topics,
         cache.clone(),
         &cfg.site_id,
-        known_devices.clone(),
+        device_channels_map.clone(),
+        device_trust_map.clone(),
+        cfg.gateway_credentials.clone(),
     )
     .await?;
 
@@ -122,7 +125,8 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                     }
                 };
                 info!(version = %fresh.info.version, "spec re-fetched");
-                *known_devices.write().await = device_ids(&fresh);
+                *device_channels_map.write().await = device_channels(&fresh);
+                *device_trust_map.write().await = fresh.x_device_trust.clone();
                 if let Err(e) =
                     validate_trust_creds_alignment(&fresh, cfg.gateway_credentials.as_ref())
                 {
@@ -147,9 +151,24 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     Ok(())
 }
 
-/// Device ids the spec currently declares — the dispatch accept set.
-fn device_ids(spec: &AsyncApiSpec) -> BTreeSet<String> {
-    spec.x_protocol_source.keys().cloned().collect()
+/// Per-device, per-`{verb}_{target}` binding map projected from the spec's
+/// x-command-source — the dispatch lookup `dispatch::handle_command` uses to
+/// resolve an inbound command topic (which carries verb+target, not the
+/// template's channel name) to its binding.
+fn device_channels(spec: &AsyncApiSpec) -> HashMap<String, HashMap<String, ProtocolBinding>> {
+    spec.x_command_source
+        .iter()
+        .map(|(device_id, commands)| {
+            let bindings = commands
+                .values()
+                .map(|cmd| {
+                    let key = format!("{}_{}", cmd.verb, cmd.target);
+                    (key, clone_binding(&cmd.binding))
+                })
+                .collect();
+            (device_id.clone(), bindings)
+        })
+        .collect()
 }
 
 /// Walk the spec's x-protocol-source and spawn one task per

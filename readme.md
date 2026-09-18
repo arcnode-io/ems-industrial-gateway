@@ -42,12 +42,13 @@ and the gateway acks the lifecycle on
 `sites/{site}/devices/{dev}/events/dispatch_state` with
 `{ ts, command_id, phase: "received"|"done"|"failed", reason? }`.
 
-`done` means **accepted, not ramped** (locked contract, ems-hmi
-`dispatchEvents.ts`). v1 acceptance = the device exists in the current
-AsyncAPI spec; the DTM schema carries no writable command bindings yet, so
-there is no south-side write. When command bindings land, the write happens
-between `received` and `done`. Ghost devices → `failed` with a reason;
-frames without a `command_id` are dropped (nothing to correlate).
+`done` means **the south-side write succeeded, not that the device ramped**
+(locked contract, ems-hmi `dispatchEvents.ts`). The command's binding is
+resolved from `x-command-source` (verb+target, since the topic never carries
+the template's own command name); Modbus TCP gets a real write, every other
+protocol is an explicit `failed` (unsupported, not a silent no-op). Unknown
+devices, unknown commands, and write errors all become `failed` with a
+reason; frames without a `command_id` are dropped (nothing to correlate).
 
 ## Synthetic Derivations
 

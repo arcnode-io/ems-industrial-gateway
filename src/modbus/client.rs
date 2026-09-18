@@ -48,6 +48,41 @@ pub async fn read_measurement(
     Ok(apply_scale_offset(raw, b.scale, b.offset))
 }
 
+/// Full write pipeline for a Modbus command: engineering value → raw int32 →
+/// encode high_low → connect → write 2 holding registers (function code 16).
+///
+/// Same trust/creds dialing rules as `read_measurement` — Modbus Security
+/// when the device requires mTLS and the gateway has creds, plain TCP
+/// otherwise.
+pub async fn write_setpoint(
+    b: &ModbusTcpBinding,
+    value: f64,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<()> {
+    let unit_id: u8 = b
+        .unit_id
+        .parse()
+        .context("unit_id must parse to u8 for Modbus")?;
+    let raw = to_raw(value, b.scale, b.offset);
+    let words = encode_int32(raw, WordOrder::HighLow);
+    match (trust, creds) {
+        (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
+            write_holding_tls(
+                &b.host,
+                b.port,
+                unit_id,
+                b.address,
+                &words,
+                subject_name,
+                creds,
+            )
+            .await
+        }
+        _ => write_holding(&b.host, b.port, unit_id, b.address, &words).await,
+    }
+}
+
 /// Word order for multi-register integer decoding.
 #[derive(Debug, Clone, Copy)]
 pub enum WordOrder {
@@ -132,6 +167,86 @@ async fn read_with_channel(
     Err(last_err.unwrap()).context("modbus read_holding_registers exhausted retries")
 }
 
+/// Connect over plain TCP and write `words` starting at `addr` (function
+/// code 16, write multiple registers).
+pub async fn write_holding(
+    host: &str,
+    port: u16,
+    unit_id: u8,
+    addr: u16,
+    words: &[u16],
+) -> Result<()> {
+    let channel = spawn_tcp_client_task(
+        HostAddr::dns(host.to_string(), port),
+        1,
+        rodbus::default_retry_strategy(),
+        rodbus::DecodeLevel::default(),
+        None,
+    );
+    write_with_channel(channel, unit_id, addr, words).await
+}
+
+/// Connect over Modbus Security (TLS) and write `words` starting at `addr`.
+/// Same subject-name-pinned `TlsClientConfig::full_pki` as `read_holding_tls`.
+#[allow(clippy::too_many_arguments)]
+pub async fn write_holding_tls(
+    host: &str,
+    port: u16,
+    unit_id: u8,
+    addr: u16,
+    words: &[u16],
+    subject_name: &str,
+    creds: &GatewayCredentials,
+) -> Result<()> {
+    let tls_config = tls::build_tls_config(
+        subject_name,
+        &creds.ca_bundle_path,
+        &creds.cert_path,
+        &creds.key_path,
+    )?;
+    let channel = spawn_tls_client_task(
+        HostAddr::dns(host.to_string(), port),
+        1,
+        rodbus::default_retry_strategy(),
+        tls_config,
+        rodbus::DecodeLevel::default(),
+        None,
+    );
+    write_with_channel(channel, unit_id, addr, words).await
+}
+
+/// Enable + write loop. Shared by plain + TLS paths — only the channel
+/// source differs. Retries on transient errors per `MAX_READ_ATTEMPTS`
+/// (same budget as reads; the failure mode — racing the initial
+/// TCP/TLS handshake — is identical).
+async fn write_with_channel(
+    mut channel: Channel,
+    unit_id: u8,
+    addr: u16,
+    words: &[u16],
+) -> Result<()> {
+    channel.enable().await.context("modbus channel enable")?;
+    let request = rodbus::client::WriteMultiple::from(addr, words.to_vec())
+        .map_err(|e| anyhow::anyhow!("invalid modbus write request: {e}"))?;
+    let param = RequestParam::new(UnitId::new(unit_id), Duration::from_secs(5));
+
+    let mut last_err = None;
+    for attempt in 0..MAX_READ_ATTEMPTS {
+        match channel
+            .write_multiple_registers(param, request.clone())
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                warn!(attempt, error = %e, "modbus write_multiple_registers failed; retrying");
+                last_err = Some(e);
+                sleep(Duration::from_millis(500 * (1 << attempt))).await;
+            }
+        }
+    }
+    Err(last_err.unwrap()).context("modbus write_multiple_registers exhausted retries")
+}
+
 /// Decode two consecutive u16 holding registers as a signed 32-bit integer.
 pub fn decode_int32(words: &[u16], order: WordOrder) -> i32 {
     let (high, low) = match order {
@@ -144,4 +259,20 @@ pub fn decode_int32(words: &[u16], order: WordOrder) -> i32 {
 /// Apply Modbus scale + offset to a raw integer reading.
 pub fn apply_scale_offset(raw: i32, scale: f64, offset: f64) -> f64 {
     raw as f64 * scale + offset
+}
+
+/// Encode a signed 32-bit integer as two consecutive u16 holding registers.
+pub fn encode_int32(value: i32, order: WordOrder) -> [u16; 2] {
+    let high = (value >> 16) as u16;
+    let low = value as u16;
+    match order {
+        WordOrder::HighLow => [high, low],
+        WordOrder::LowHigh => [low, high],
+    }
+}
+
+/// Invert `apply_scale_offset`: convert an engineering-unit setpoint back to
+/// the raw integer a Modbus write puts on the wire.
+pub fn to_raw(value: f64, scale: f64, offset: f64) -> i32 {
+    (((value - offset) / scale).round()) as i32
 }
