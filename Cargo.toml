@@ -2,7 +2,7 @@
 name = "ems-industrial-gateway"
 version = "1.0.0-beta"
 edition = "2024"
-rust-version = "1.93.0"
+rust-version = "1.98.1"
 
 [lints.clippy]
 missing_docs_in_private_items = "warn"
@@ -36,9 +36,9 @@ anyhow = "1"
 backoff = { version = "0.4", features = ["tokio"] }
 futures = "0.3"
 dashmap = "6.1.0"
-aws-config = "1.8.18"
-aws-sdk-cloudformation = "1.117.0"
-aws-sdk-secretsmanager = "1.108.0"
+aws-config = { version = "1.8.18", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-cloudformation = { version = "1.117.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-secretsmanager = { version = "1.108.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
 
 [dev-dependencies]
 axum = "0.8"
@@ -47,7 +47,7 @@ rcgen = "0.13"
 rustls = "0.23"
 rustls-pemfile = "2"
 tempfile = "3"
-testcontainers = "0.20"
+testcontainers = "0.28"
 tokio-rustls = "0.26"
 wiremock = "0.6"
 yasna = "0.5"
