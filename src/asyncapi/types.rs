@@ -184,15 +184,15 @@ pub struct Dnp3TcpBinding {
 }
 
 /// Synthetic binding: gateway computes a value from cached MQTT inputs via a
-/// named formula. No south-side device; the "south" is MQTT itself.
+/// named operation. No south-side device; the "south" is MQTT itself.
 ///
 /// Topic placeholders in `inputs`:
 /// - `{site_id}` — substituted from gateway runtime config at subscribe time.
 /// - `{device_id}` — already resolved by `ems-device-api` at AsyncAPI gen time.
 #[derive(Debug, Deserialize)]
 pub struct SyntheticBinding {
-    /// Formula name: `subtract`, `sum`, `mean`, `max`, `min`.
-    pub formula: String,
+    /// Operation name: `subtract`, `sum`, `mean`, `max`, `min`.
+    pub operation: String,
     /// Input topic templates the synthetic task subscribes to and caches.
     pub inputs: Vec<String>,
 }
@@ -209,7 +209,7 @@ mod tests {
             "unit": "watts",
             "poll_rate_hz": 1.0,
             "protocol": "synthetic",
-            "formula": "subtract",
+            "operation": "subtract",
             "inputs": [
                 "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
                 "sites/{site_id}/devices/bess_module_1/measurements/active_power/watts"
@@ -217,11 +217,11 @@ mod tests {
         }"#;
         // Act
         let src: ProtocolSource = serde_json::from_str(json).unwrap();
-        // Assert — variant + formula + inputs[] survive deserialization
+        // Assert — variant + operation + inputs[] survive deserialization
         let ProtocolBinding::Synthetic(b) = src.binding else {
             panic!("expected Synthetic variant");
         };
-        assert_eq!(b.formula, "subtract");
+        assert_eq!(b.operation, "subtract");
         assert_eq!(b.inputs.len(), 2);
         assert!(b.inputs[1].contains("bess_module_1"));
     }

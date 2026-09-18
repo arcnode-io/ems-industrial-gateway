@@ -3,7 +3,7 @@
 //! Per ADR (handoff §B): a "synthetic" channel publishes a value computed
 //! from cached MQTT inputs via a named pure function. The gateway subscribes
 //! to declared input topics, caches the latest float value per topic, and
-//! periodically (per the measurement's `poll_rate_hz`) evaluates the formula
+//! periodically (per the measurement's `poll_rate_hz`) evaluates the operation
 //! over the cached values and publishes a `FloatSample` to the channel's
 //! canonical MQTT address.
 //!
@@ -13,9 +13,9 @@
 //! recoverable from the underlying input channels' status measurements.
 
 pub mod cache;
-pub mod formula;
+pub mod operation;
 pub mod task;
 
 pub use cache::{InputCache, new_input_cache};
-pub use formula::Formula;
+pub use operation::Operation;
 pub use task::SyntheticTaskConfig;

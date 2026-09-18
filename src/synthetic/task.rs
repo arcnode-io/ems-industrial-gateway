@@ -1,5 +1,5 @@
 //! One async task per synthetic channel: tick → read cached inputs → apply
-//! formula → publish FloatSample.
+//! operation → publish FloatSample.
 //!
 //! Hold semantic (handoff Q5b): does NOT publish until every declared input
 //! topic has at least one cached sample. Consumers watching the output topic
@@ -7,7 +7,7 @@
 //! the input channels' own status measurements per ADR §5.
 
 use crate::synthetic::cache::InputCache;
-use crate::synthetic::formula::Formula;
+use crate::synthetic::operation::Operation;
 use anyhow::Result;
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
@@ -25,8 +25,8 @@ pub struct SyntheticTaskConfig {
     pub output_topic: String,
     /// Topics this task reads from the shared cache on each tick.
     pub input_topics: Vec<String>,
-    /// Parsed formula (validated at gateway startup, not runtime).
-    pub formula: Formula,
+    /// Parsed operation (validated at gateway startup, not runtime).
+    pub operation: Operation,
     /// Tick cadence in Hz; derived from the measurement's poll_rate_hz.
     pub tick_hz: f64,
 }
@@ -75,7 +75,7 @@ async fn tick_once(
         );
         return Ok(());
     };
-    let result = cfg.formula.apply(&values)?;
+    let result = cfg.operation.apply(&values)?;
     let payload = format!(
         r#"{{"ts":"{ts}","value":{value}}}"#,
         ts = Utc::now().to_rfc3339(),

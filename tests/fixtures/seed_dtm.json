@@ -167,7 +167,7 @@
           "publisher": "gateway",
           "binding": {
             "protocol": "synthetic",
-            "formula": "subtract",
+            "operation": "subtract",
             "inputs": [
               "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
               "sites/{site_id}/devices/bess_module_1/measurements/active_power/watts"

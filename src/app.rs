@@ -21,7 +21,7 @@ use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
 use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
-use crate::synthetic::{self, Formula, InputCache, SyntheticTaskConfig};
+use crate::synthetic::{self, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -222,7 +222,7 @@ fn spawn_task_set(
 }
 
 /// Build a `SyntheticTaskConfig` and spawn the loop. Returns None if the
-/// formula name is unknown (logged and the channel is dropped — the gateway
+/// operation name is unknown (logged and the channel is dropped — the gateway
 /// keeps running for valid channels).
 #[allow(clippy::too_many_arguments)]
 fn spawn_synthetic(
@@ -234,10 +234,10 @@ fn spawn_synthetic(
     mqtt: paho_mqtt::AsyncClient,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let formula = match Formula::parse(&binding.formula) {
+    let operation = match Operation::parse(&binding.operation) {
         Ok(f) => f,
         Err(err) => {
-            warn!(output_topic, error = %err, "synthetic formula parse failed; dropping channel");
+            warn!(output_topic, error = %err, "synthetic operation parse failed; dropping channel");
             return None;
         }
     };
@@ -249,7 +249,7 @@ fn spawn_synthetic(
     let cfg = SyntheticTaskConfig {
         output_topic: output_topic.to_string(),
         input_topics,
-        formula,
+        operation,
         tick_hz,
     };
     Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
@@ -331,7 +331,7 @@ async fn read_value(
         ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b, trust, creds).await,
         ProtocolBinding::BacnetSc(b) => bacnet_sc::read_measurement(b, trust, creds).await,
         // Synthetic channels are driven by `src/synthetic/` (own loop with
-        // MQTT subscriptions + formula evaluation); never reached via the
+        // MQTT subscriptions + operation evaluation); never reached via the
         // single-point poll path. Unreachable acts as a tripwire if the
         // dispatcher upstream forgets to route synthetic channels separately.
         ProtocolBinding::Synthetic(_) => {
@@ -396,7 +396,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             variation: d.variation,
         }),
         ProtocolBinding::Synthetic(s) => ProtocolBinding::Synthetic(SyntheticBinding {
-            formula: s.formula.clone(),
+            operation: s.operation.clone(),
             inputs: s.inputs.clone(),
         }),
         ProtocolBinding::BacnetIp(b) => ProtocolBinding::BacnetIp(BacnetIpBinding {

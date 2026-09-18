@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// One cache entry: the latest float value + when it landed. Instant is for
-/// future staleness checks; not used by the formula evaluator today.
+/// future staleness checks; not used by the operation evaluator today.
 pub type CacheEntry = (f64, Instant);
 
 /// Topic → (latest value, received-at).

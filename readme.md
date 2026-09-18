@@ -64,7 +64,7 @@ import_headroom:
   publisher: gateway
   binding:
     protocol: synthetic
-    formula: subtract
+    operation: subtract
     inputs:
       - sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts
       - sites/{site_id}/devices/{device_id}/measurements/active_power/watts
@@ -74,7 +74,7 @@ How the gateway runs it:
 
 1. **Boot**: collect every synthetic binding's `inputs[]` (with `{site_id}` substituted from cfg), subscribe to all of them via the single MQTT subscriber.
 2. **Cache**: incoming FloatSample messages land in a shared `DashMap<topic, (value, instant)>`.
-3. **Tick**: per-channel async task reads the cached values, applies the formula (one of `subtract`, `sum`, `mean`, `max`, `min`), publishes a FloatSample on the canonical output topic.
+3. **Tick**: per-channel async task reads the cached values, applies the operation (one of `subtract`, `sum`, `mean`, `max`, `min`), publishes a FloatSample on the canonical output topic.
 4. **Hold semantic**: synthetic does NOT publish until every declared input has at least one cached sample. Consumers infer "headroom unavailable" from the underlying inputs' status channels.
 
 `{device_id}` in `inputs[]` is already resolved by ems-device-api at AsyncAPI generation time; gateway only substitutes `{site_id}`.
