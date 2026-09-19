@@ -1,8 +1,12 @@
-//! Modbus TCP / Modbus Security (TLS+Role) client + decode helpers.
+//! Modbus TCP / Modbus Security (TLS+Role) client — connection + read/write
+//! pipelines. Pure decode/encode lives in `modbus::codec`; re-exported here
+//! so existing call sites (`modbus::client::{WordOrder, decode_int32, ...}`)
+//! keep working unchanged.
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ModbusTcpBinding;
 use crate::config::GatewayCredentials;
+use crate::modbus::codec::{decode_raw, encode_raw};
 use crate::modbus::tls;
 use anyhow::{Context, Result};
 use rodbus::client::{
@@ -13,13 +17,18 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
 
+pub use crate::modbus::codec::{
+    ModbusDataType, WordOrder, apply_scale_offset, decode_int32, encode_int32, to_raw,
+};
+
 /// Attempts to retry on transient "no connection to server" — rodbus channels
 /// reconnect in the background and the first read can race with the initial
 /// TCP / TLS handshake.
 const MAX_READ_ATTEMPTS: u32 = 5;
 
-/// Full read pipeline for a Modbus measurement: connect → read 2 holding
-/// registers → decode int32 high_low → apply scale/offset.
+/// Full read pipeline for a Modbus measurement: connect → read
+/// `data_type.register_count()` holding registers → decode per data type +
+/// word order → apply scale/offset.
 ///
 /// `trust` carries the device's `x-device-trust` block. `creds` is the
 /// gateway's global mTLS material. `Some(TlsMutual{..})` + `Some(creds)`
@@ -38,18 +47,29 @@ pub async fn read_measurement(
         .unit_id
         .parse()
         .context("unit_id must parse to u8 for Modbus")?;
+    let count = b.data_type.register_count();
     let words = match (trust, creds) {
         (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
-            read_holding_tls(&b.host, b.port, unit_id, b.address, 2, subject_name, creds).await?
+            read_holding_tls(
+                &b.host,
+                b.port,
+                unit_id,
+                b.address,
+                count,
+                subject_name,
+                creds,
+            )
+            .await?
         }
-        _ => read_holding(&b.host, b.port, unit_id, b.address, 2).await?,
+        _ => read_holding(&b.host, b.port, unit_id, b.address, count).await?,
     };
-    let raw = decode_int32(&words, WordOrder::HighLow);
+    let raw = decode_raw(&words, b.data_type, b.word_order);
     Ok(apply_scale_offset(raw, b.scale, b.offset))
 }
 
-/// Full write pipeline for a Modbus command: engineering value → raw int32 →
-/// encode high_low → connect → write 2 holding registers (function code 16).
+/// Full write pipeline for a Modbus command: engineering value → raw →
+/// encode per data type + word order → connect → write holding registers
+/// (function code 16).
 ///
 /// Same trust/creds dialing rules as `read_measurement` — Modbus Security
 /// when the device requires mTLS and the gateway has creds, plain TCP
@@ -65,7 +85,7 @@ pub async fn write_setpoint(
         .parse()
         .context("unit_id must parse to u8 for Modbus")?;
     let raw = to_raw(value, b.scale, b.offset);
-    let words = encode_int32(raw, WordOrder::HighLow);
+    let words = encode_raw(raw, b.data_type, b.word_order);
     match (trust, creds) {
         (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
             write_holding_tls(
@@ -81,15 +101,6 @@ pub async fn write_setpoint(
         }
         _ => write_holding(&b.host, b.port, unit_id, b.address, &words).await,
     }
-}
-
-/// Word order for multi-register integer decoding.
-#[derive(Debug, Clone, Copy)]
-pub enum WordOrder {
-    /// High word first (AB CD).
-    HighLow,
-    /// Low word first (CD AB).
-    LowHigh,
 }
 
 /// Connect over plain TCP and read `count` holding registers starting at `addr`.
@@ -245,34 +256,4 @@ async fn write_with_channel(
         }
     }
     Err(last_err.unwrap()).context("modbus write_multiple_registers exhausted retries")
-}
-
-/// Decode two consecutive u16 holding registers as a signed 32-bit integer.
-pub fn decode_int32(words: &[u16], order: WordOrder) -> i32 {
-    let (high, low) = match order {
-        WordOrder::HighLow => (words[0], words[1]),
-        WordOrder::LowHigh => (words[1], words[0]),
-    };
-    (((high as u32) << 16) | (low as u32)) as i32
-}
-
-/// Apply Modbus scale + offset to a raw integer reading.
-pub fn apply_scale_offset(raw: i32, scale: f64, offset: f64) -> f64 {
-    raw as f64 * scale + offset
-}
-
-/// Encode a signed 32-bit integer as two consecutive u16 holding registers.
-pub fn encode_int32(value: i32, order: WordOrder) -> [u16; 2] {
-    let high = (value >> 16) as u16;
-    let low = value as u16;
-    match order {
-        WordOrder::HighLow => [high, low],
-        WordOrder::LowHigh => [low, high],
-    }
-}
-
-/// Invert `apply_scale_offset`: convert an engineering-unit setpoint back to
-/// the raw integer a Modbus write puts on the wire.
-pub fn to_raw(value: f64, scale: f64, offset: f64) -> i32 {
-    (((value - offset) / scale).round()) as i32
 }

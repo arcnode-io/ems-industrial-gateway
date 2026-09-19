@@ -515,6 +515,8 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             address: m.address,
             scale: m.scale,
             offset: m.offset,
+            data_type: m.data_type,
+            word_order: m.word_order,
         }),
         ProtocolBinding::Snmp(s) => ProtocolBinding::Snmp(SnmpBinding {
             host: s.host.clone(),

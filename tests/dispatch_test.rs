@@ -11,6 +11,7 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::asyncapi::types::{ModbusTcpBinding, ProtocolBinding};
+use ems_industrial_gateway::modbus::client::{ModbusDataType, WordOrder};
 use ems_industrial_gateway::mqtt::{publisher, subscriber};
 use ems_industrial_gateway::synthetic::new_input_cache;
 use fixtures::containers::{start_ems_hivemq_with_credentials, start_mock_modbus_server_writable};
@@ -52,6 +53,8 @@ async fn known_device_channels() -> Result<(
         address: 50,
         scale: 1.0,
         offset: 0.0,
+        data_type: ModbusDataType::Int32,
+        word_order: WordOrder::HighLow,
     });
     let mut commands = HashMap::new();
     commands.insert("set_active_power".to_string(), binding);

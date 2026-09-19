@@ -1,5 +1,6 @@
 //! Per-protocol binding field structs — one per `ProtocolBinding` variant.
 
+use crate::modbus::codec::{ModbusDataType, WordOrder};
 use serde::Deserialize;
 
 /// Modbus TCP binding fields (template + device.connection merged in
@@ -19,6 +20,15 @@ pub struct ModbusTcpBinding {
     pub scale: f64,
     /// Linear offset applied after scaling.
     pub offset: f64,
+    /// Register wire width. Defaults to `Int32` — matches every binding
+    /// that predates this field, so a payload omitting it (real devices
+    /// before edp-api annotated data_type, or a hand-rolled test stub)
+    /// keeps the old 2-register behavior.
+    #[serde(default)]
+    pub data_type: ModbusDataType,
+    /// Multi-register word order. Defaults to `HighLow`.
+    #[serde(default)]
+    pub word_order: WordOrder,
 }
 
 /// SNMP v2c binding fields.

@@ -7,7 +7,9 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::asyncapi::types::ModbusTcpBinding;
-use ems_industrial_gateway::modbus::client::{WordOrder, decode_int32, read_holding};
+use ems_industrial_gateway::modbus::client::{
+    ModbusDataType, WordOrder, decode_int32, read_holding,
+};
 use fixtures::containers::start_mock_modbus_server_writable;
 
 /// bess_rack's set_active_power binding: function code 16, address 50,
@@ -26,6 +28,8 @@ async fn write_setpoint_lands_the_exact_value_on_the_wire() -> Result<()> {
         address: ADDRESS,
         scale: 1.0,
         offset: 0.0,
+        data_type: ModbusDataType::Int32,
+        word_order: WordOrder::HighLow,
     };
 
     // Act — write a setpoint through the same path dispatch::handle_command uses.
@@ -52,6 +56,8 @@ async fn write_is_rejected_when_server_not_in_writable_mode() -> Result<()> {
         address: ADDRESS,
         scale: 1.0,
         offset: 0.0,
+        data_type: ModbusDataType::Int32,
+        word_order: WordOrder::HighLow,
     };
 
     // Act + Assert — the default mock still rejects writes (IllegalFunction).

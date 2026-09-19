@@ -12,7 +12,7 @@ fn decode_int32_high_low() {
 
 #[test]
 fn apply_scale_offset_identity() {
-    let result = apply_scale_offset(1_000_000, 1.0, 0.0);
+    let result = apply_scale_offset(1_000_000.0, 1.0, 0.0);
     assert_eq!(result, 1_000_000.0);
 }
 
@@ -33,11 +33,11 @@ fn encode_decode_int32_round_trips() {
 #[test]
 fn to_raw_identity() {
     let result = to_raw(1_000_000.0, 1.0, 0.0);
-    assert_eq!(result, 1_000_000);
+    assert_eq!(result, 1_000_000.0);
 }
 
 #[test]
 fn to_raw_apply_scale_offset_round_trips() {
-    let raw = apply_scale_offset(7_000_000, 2.0, 5.0);
-    assert_eq!(to_raw(raw, 2.0, 5.0), 7_000_000);
+    let raw = apply_scale_offset(7_000_000.0, 2.0, 5.0);
+    assert_eq!(to_raw(raw, 2.0, 5.0), 7_000_000.0);
 }
