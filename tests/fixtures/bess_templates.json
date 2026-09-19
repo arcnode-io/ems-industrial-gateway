@@ -1,0 +1,386 @@
+{
+  "bess_rack": {
+    "template": "bess_rack",
+    "kind": "leaf",
+    "equipment_id": "EXT-BESS-001",
+    "vendor": "Tesla",
+    "model": "Megapack 2 XL (PN 1848844-XX-Y)",
+    "capacity_kwh": 4000.0,
+    "description": "Tesla Megapack 2 XL 4 MWh AC-coupled BESS with grid-forming inverter via Modbus TCP",
+    "measurements": {
+      "state_of_charge": {
+        "unit": "percent",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "State of Charge",
+        "iec_61850_ref": "ZBAT.BatChaSt",
+        "bounds": {
+          "min": 0,
+          "max": 100,
+          "nominal": 50
+        },
+        "thresholds": {
+          "warn_min": 15,
+          "warn_max": 90,
+          "alarm_min": 5,
+          "alarm_max": 95
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 0,
+          "data_type": "uint16",
+          "word_order": "high_low",
+          "scale": 0.1
+        }
+      },
+      "active_power": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Active Power (+ discharge, - charge)",
+        "iec_61850_ref": "MMXU.W",
+        "bounds": {
+          "min": -4000000,
+          "max": 4000000,
+          "nominal": 0
+        },
+        "thresholds": {
+          "warn_min": -3800000,
+          "warn_max": 3800000,
+          "alarm_min": -4000000,
+          "alarm_max": 4000000
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 10,
+          "data_type": "int32",
+          "word_order": "high_low",
+          "scale": 1.0
+        }
+      },
+      "reactive_power": {
+        "unit": "vars",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Reactive Power",
+        "iec_61850_ref": "MMXU.VAr",
+        "bounds": {
+          "min": -2000000,
+          "max": 2000000,
+          "nominal": 0
+        },
+        "thresholds": {
+          "warn_min": -1800000,
+          "warn_max": 1800000,
+          "alarm_min": -2000000,
+          "alarm_max": 2000000
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 12,
+          "data_type": "int32",
+          "word_order": "high_low",
+          "scale": 1.0
+        }
+      },
+      "ac_voltage": {
+        "unit": "volts",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "AC Bus Voltage",
+        "iec_61850_ref": "MMXU.PhV.phsA",
+        "bounds": {
+          "min": 0,
+          "max": 600,
+          "nominal": 480
+        },
+        "thresholds": {
+          "warn_min": 432,
+          "warn_max": 528,
+          "alarm_min": 408,
+          "alarm_max": 552
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 20,
+          "data_type": "uint16",
+          "word_order": "high_low",
+          "scale": 0.1
+        }
+      },
+      "frequency": {
+        "unit": "hertz",
+        "type": "float",
+        "poll_rate_hz": 10,
+        "display_name_default": "AC Frequency",
+        "iec_61850_ref": "MMXU.Hz",
+        "bounds": {
+          "min": 55.0,
+          "max": 65.0,
+          "nominal": 60.0
+        },
+        "thresholds": {
+          "warn_min": 59.5,
+          "warn_max": 60.5,
+          "alarm_min": 59.0,
+          "alarm_max": 61.0
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 22,
+          "data_type": "uint16",
+          "word_order": "high_low",
+          "scale": 0.01
+        }
+      },
+      "energy_discharged": {
+        "unit": "watt_hours",
+        "type": "float",
+        "poll_rate_hz": 0.1,
+        "display_name_default": "Energy Discharged",
+        "iec_61850_ref": "MMTR.SupWh",
+        "bounds": {
+          "min": 0,
+          "max": 1000000000,
+          "nominal": 0
+        },
+        "thresholds": {
+          "warn_min": 0,
+          "warn_max": 950000000,
+          "alarm_min": 0,
+          "alarm_max": 1000000000
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 30,
+          "data_type": "int32",
+          "word_order": "high_low",
+          "scale": 1.0
+        }
+      },
+      "operating_state": {
+        "unit": "none",
+        "type": "enum",
+        "poll_rate_hz": 1,
+        "display_name_default": "Operating State",
+        "iec_61850_ref": "ZGEN.Mod.stVal",
+        "values": {
+          "0": "STANDBY",
+          "1": "CHARGING",
+          "2": "DISCHARGING",
+          "3": "FAULT",
+          "4": "OFFLINE"
+        },
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 3,
+          "address": 40,
+          "data_type": "uint16",
+          "word_order": "high_low"
+        }
+      }
+    },
+    "commands": {
+      "set_active_power": {
+        "verb": "set",
+        "target": "active_power",
+        "unit": "watts",
+        "payload": "float",
+        "display_name_default": "Set Active Power Setpoint",
+        "binding": {
+          "protocol": "modbus_tcp",
+          "function_code": 16,
+          "address": 50,
+          "data_type": "int32",
+          "word_order": "high_low",
+          "scale": 1.0
+        }
+      }
+    }
+  },
+  "bess_module": {
+    "template": "bess_module",
+    "kind": "module",
+    "description": "BESS module aggregation \u2014 published rollups + setpoint fanout",
+    "contains": [
+      {
+        "template": "bess_rack",
+        "qty": "scalable"
+      }
+    ],
+    "measurements": {
+      "state_of_charge": {
+        "unit": "percent",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Module State of Charge",
+        "publisher": "gateway",
+        "binding": {
+          "protocol": "synthetic",
+          "operation": "weighted_mean",
+          "source_measurement": "state_of_charge"
+        }
+      },
+      "active_power": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Module Active Power",
+        "publisher": "gateway",
+        "binding": {
+          "protocol": "synthetic",
+          "operation": "sum",
+          "source_measurement": "active_power"
+        }
+      },
+      "reactive_power": {
+        "unit": "vars",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Module Reactive Power",
+        "publisher": "gateway",
+        "binding": {
+          "protocol": "synthetic",
+          "operation": "sum",
+          "source_measurement": "reactive_power"
+        }
+      },
+      "import_headroom": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Module Import Headroom",
+        "publisher": "gateway",
+        "binding": {
+          "protocol": "synthetic",
+          "operation": "subtract",
+          "inputs": [
+            "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
+            "sites/{site_id}/devices/{device_id}/measurements/active_power/watts"
+          ]
+        }
+      },
+      "export_headroom": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 1,
+        "display_name_default": "Module Export Headroom",
+        "publisher": "gateway",
+        "binding": {
+          "protocol": "synthetic",
+          "operation": "subtract",
+          "inputs": [
+            "sites/{site_id}/devices/operating_envelope/measurements/export_limit/watts",
+            "sites/{site_id}/devices/{device_id}/measurements/active_power/watts"
+          ]
+        }
+      }
+    },
+    "commands": {
+      "set_active_power": {
+        "verb": "set",
+        "target": "active_power",
+        "unit": "watts",
+        "payload": "float",
+        "display_name_default": "Set Active Power",
+        "binding": {
+          "protocol": "distribute",
+          "allocation_policy": "soc_weighted",
+          "ramp_rate_per_sec": 0.1,
+          "hysteresis_margin": 0.05,
+          "hysteresis_dwell_secs": 30.0
+        }
+      },
+      "set_reactive_power": {
+        "verb": "set",
+        "target": "reactive_power",
+        "unit": "vars",
+        "payload": "float",
+        "fanout": "local_process"
+      }
+    }
+  },
+  "operating_envelope": {
+    "template": "operating_envelope",
+    "kind": "leaf",
+    "equipment_id": "GRD-OE-001",
+    "vendor": "ARCNODE",
+    "model": "Operating Envelope Producer (Pi RTU)",
+    "description": "Utility-published DOE per IEEE 2030.5 / CSIP-AUS (DERControlBase). Singleton per site for MVP.",
+    "measurements": {
+      "import_limit": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 0.0033,
+        "display_name_default": "Import Limit",
+        "iec_61850_ref": "CSIP.opModImpLimW",
+        "bounds": {
+          "min": 0,
+          "max": 10000000,
+          "nominal": 5000000
+        },
+        "thresholds": {
+          "warn_min": 100000,
+          "warn_max": 9500000,
+          "alarm_min": 0,
+          "alarm_max": 10000000
+        },
+        "binding": {
+          "protocol": "dnp3_tcp",
+          "point_type": "analog_input",
+          "point_index": 0,
+          "variation": 5
+        }
+      },
+      "export_limit": {
+        "unit": "watts",
+        "type": "float",
+        "poll_rate_hz": 0.0033,
+        "display_name_default": "Export Limit",
+        "iec_61850_ref": "CSIP.opModExpLimW",
+        "bounds": {
+          "min": 0,
+          "max": 10000000,
+          "nominal": 0
+        },
+        "thresholds": {
+          "warn_min": 0,
+          "warn_max": 9500000,
+          "alarm_min": 0,
+          "alarm_max": 10000000
+        },
+        "binding": {
+          "protocol": "dnp3_tcp",
+          "point_type": "analog_input",
+          "point_index": 1,
+          "variation": 5
+        }
+      },
+      "status": {
+        "unit": "none",
+        "type": "enum",
+        "poll_rate_hz": 1,
+        "display_name_default": "Status",
+        "iec_61850_ref": "ZGEN.Mod.stVal",
+        "values": {
+          "0": "OK",
+          "1": "STALE",
+          "2": "INVALID",
+          "3": "COMM_FAIL"
+        },
+        "binding": {
+          "protocol": "dnp3_tcp",
+          "point_type": "analog_input",
+          "point_index": 100,
+          "variation": 2
+        }
+      }
+    }
+  }
+}

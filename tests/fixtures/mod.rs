@@ -11,6 +11,8 @@ pub mod modbus_security;
 #[allow(dead_code)]
 pub mod pki;
 #[allow(dead_code)]
+pub mod real_dtm;
+#[allow(dead_code)]
 pub mod redfish_security;
 #[allow(dead_code)]
 pub mod spec_stub;
