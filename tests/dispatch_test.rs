@@ -231,7 +231,11 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
             1,
         ))
         .await?;
-    tokio::time::sleep(Duration::from_millis(800)).await; // let both acks land
+    // Let both acks land. Generous margin: the real Modbus write's first
+    // connection attempt commonly races the container's TCP listener and
+    // needs one retry (500ms backoff per modbus/client.rs), so anything
+    // close to that backoff step flakes under load.
+    tokio::time::sleep(Duration::from_millis(3000)).await;
     let mut events_stream = operator.get_stream(16);
     operator
         .subscribe("sites/site_001/devices/dev_known/events/dispatch_state", 1)
