@@ -112,6 +112,7 @@ pub async fn subscribe(
                     &channels,
                     &trust,
                     creds.as_ref(),
+                    &cache,
                     msg.topic(),
                     msg.payload(),
                 )

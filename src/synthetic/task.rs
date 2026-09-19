@@ -7,7 +7,7 @@
 //! the input channels' own status measurements per ADR §5.
 
 use crate::synthetic::cache::InputCache;
-use crate::synthetic::operation::Operation;
+use crate::synthetic::operation::{self, Operation};
 use anyhow::Result;
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
@@ -19,14 +19,31 @@ use tracing::{debug, warn};
 /// MQTT QoS for synthetic publishes — matches ADR-002 §11 measurement family.
 const QOS_MEASUREMENT: i32 = 0;
 
+/// What a synthetic task computes each tick — the two wire-shape modes
+/// (`inputs[]` vs `pairs[]`) are mutually exclusive, so this is a real
+/// either/or, not two optional fields.
+pub enum Computation {
+    /// Apply `operation` to the cached values at `input_topics`, in order.
+    Operation {
+        /// Parsed operation (validated at gateway startup, not runtime).
+        operation: Operation,
+        /// Topics this task reads from the shared cache on each tick.
+        input_topics: Vec<String>,
+    },
+    /// Apply `weighted_mean` to the cached value at each pair's topic,
+    /// weighted by that pair's static weight (e.g. a rack's `capacity_kwh`).
+    WeightedMean {
+        /// `(topic, weight)` pairs this task reads on each tick.
+        pairs: Vec<(String, f64)>,
+    },
+}
+
 /// Everything one synthetic task needs to run forever.
 pub struct SyntheticTaskConfig {
     /// Canonical output topic (already site_id-substituted by caller).
     pub output_topic: String,
-    /// Topics this task reads from the shared cache on each tick.
-    pub input_topics: Vec<String>,
-    /// Parsed operation (validated at gateway startup, not runtime).
-    pub operation: Operation,
+    /// What this task computes each tick.
+    pub computation: Computation,
     /// Tick cadence in Hz; derived from the measurement's poll_rate_hz.
     pub tick_hz: f64,
 }
@@ -68,14 +85,31 @@ async fn tick_once(
     cache: &InputCache,
     mqtt: &AsyncClient,
 ) -> Result<()> {
-    let Some(values) = gather_inputs(&cfg.input_topics, cache) else {
-        debug!(
-            topic = %cfg.output_topic,
-            "synthetic hold: not all inputs cached yet",
-        );
-        return Ok(());
+    let result = match &cfg.computation {
+        Computation::Operation {
+            operation,
+            input_topics,
+        } => {
+            let Some(values) = gather_inputs(input_topics, cache) else {
+                debug!(
+                    topic = %cfg.output_topic,
+                    "synthetic hold: not all inputs cached yet",
+                );
+                return Ok(());
+            };
+            operation.apply(&values)?
+        }
+        Computation::WeightedMean { pairs } => {
+            let Some(resolved) = gather_pairs(pairs, cache) else {
+                debug!(
+                    topic = %cfg.output_topic,
+                    "synthetic hold: not all pairs cached yet",
+                );
+                return Ok(());
+            };
+            operation::weighted_mean(&resolved)?
+        }
     };
-    let result = cfg.operation.apply(&values)?;
     let payload = format!(
         r#"{{"ts":"{ts}","value":{value}}}"#,
         ts = Utc::now().to_rfc3339(),
@@ -95,6 +129,17 @@ fn gather_inputs(input_topics: &[String], cache: &InputCache) -> Option<Vec<f64>
         values.push(entry.0);
     }
     Some(values)
+}
+
+/// Return Some((value, weight)) pairs if EVERY pair's topic has a cached
+/// entry; None if any is missing (same hold semantic as `gather_inputs`).
+fn gather_pairs(pairs: &[(String, f64)], cache: &InputCache) -> Option<Vec<(f64, f64)>> {
+    let mut resolved = Vec::with_capacity(pairs.len());
+    for (topic, weight) in pairs {
+        let entry = cache.get(topic)?;
+        resolved.push((entry.0, *weight));
+    }
+    Some(resolved)
 }
 
 /// Convert poll_rate_hz to a tick period in milliseconds; min 1ms so the
@@ -134,6 +179,29 @@ mod tests {
         let values = gather_inputs(&["a".into(), "b".into()], &cache).unwrap();
         // Assert
         assert_eq!(values, vec![10.0, 3.0]);
+    }
+
+    #[test]
+    fn gather_pairs_holds_when_any_pair_missing() {
+        // Arrange — one of two topics not yet cached
+        let cache = new_input_cache();
+        cache.insert("a".into(), (50.0, Instant::now()));
+        // Act
+        let result = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache);
+        // Assert
+        assert!(result.is_none(), "hold when any pair missing");
+    }
+
+    #[test]
+    fn gather_pairs_returns_value_weight_pairs_when_all_cached() {
+        // Arrange
+        let cache = new_input_cache();
+        cache.insert("a".into(), (50.0, Instant::now()));
+        cache.insert("b".into(), (80.0, Instant::now()));
+        // Act
+        let pairs = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache).unwrap();
+        // Assert — weight carried through unchanged, value from the cache
+        assert_eq!(pairs, vec![(50.0, 2.0), (80.0, 1.0)]);
     }
 
     #[test]

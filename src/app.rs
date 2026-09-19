@@ -21,7 +21,7 @@ use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
 use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
-use crate::synthetic::{self, InputCache, Operation, SyntheticTaskConfig};
+use crate::synthetic::{self, Computation, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -74,11 +74,14 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // unconfigured. Security regression should be loud, not silent.
     validate_trust_creds_alignment(&initial_spec, cfg.gateway_credentials.as_ref())?;
 
-    // Synthetic-channel input topics. Subscribed alongside the beacon so the
-    // single dispatcher routes both. Reconcile-time additions are NOT
-    // dynamically resubscribed today; topology changes that introduce NEW
-    // synthetic inputs need a gateway restart (logged + tracked in handoff).
-    let input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
+    // Synthetic-channel inputs + distribute-binding children's cache-backed
+    // topics (operating_state/state_of_charge — read at dispatch time, not
+    // polled). Subscribed alongside the beacon so the single dispatcher
+    // routes all three. Reconcile-time additions are NOT dynamically
+    // resubscribed today; topology changes that introduce new ones need a
+    // gateway restart (logged + tracked in handoff).
+    let mut input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
+    input_topics.extend(collect_distribute_input_topics(&initial_spec, &cfg.site_id));
     let cache = synthetic::new_input_cache();
     // Device/channel bindings backing dispatch — refreshed on every
     // successful spec re-fetch so accepts/rejects/writes track live topology.
@@ -253,22 +256,34 @@ fn spawn_synthetic(
     mqtt: paho_mqtt::AsyncClient,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let operation = match Operation::parse(&binding.operation) {
-        Ok(f) => f,
-        Err(err) => {
-            warn!(output_topic, error = %err, "synthetic operation parse failed; dropping channel");
-            return None;
+    let computation = if binding.operation == "weighted_mean" {
+        let pairs = binding
+            .pairs
+            .iter()
+            .map(|p| (substitute_site_id(&p.topic, site_id), p.weight))
+            .collect();
+        Computation::WeightedMean { pairs }
+    } else {
+        let operation = match Operation::parse(&binding.operation) {
+            Ok(f) => f,
+            Err(err) => {
+                warn!(output_topic, error = %err, "synthetic operation parse failed; dropping channel");
+                return None;
+            }
+        };
+        let input_topics = binding
+            .inputs
+            .iter()
+            .map(|t| substitute_site_id(t, site_id))
+            .collect();
+        Computation::Operation {
+            operation,
+            input_topics,
         }
     };
-    let input_topics: Vec<String> = binding
-        .inputs
-        .iter()
-        .map(|t| substitute_site_id(t, site_id))
-        .collect();
     let cfg = SyntheticTaskConfig {
         output_topic: output_topic.to_string(),
-        input_topics,
-        operation,
+        computation,
         tick_hz,
     };
     Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
@@ -284,6 +299,29 @@ fn collect_synthetic_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<Str
             if let ProtocolBinding::Synthetic(b) = &source.binding {
                 for raw in &b.inputs {
                     topics.insert(substitute_site_id(raw, site_id));
+                }
+                for pair in &b.pairs {
+                    topics.insert(substitute_site_id(&pair.topic, site_id));
+                }
+            }
+        }
+    }
+    topics.into_iter().collect()
+}
+
+/// Walk the spec's x-command-source for `distribute` bindings and collect
+/// each child's `operating_state_topic`/`state_of_charge_topic` (with
+/// `{site_id}` substituted). These are read from the cache at dispatch time,
+/// not polled — the gateway still needs to be subscribed for them to ever
+/// land in the cache.
+fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
+    let mut topics: BTreeSet<String> = BTreeSet::new();
+    for commands in spec.x_command_source.values() {
+        for source in commands.values() {
+            if let ProtocolBinding::Distribute(d) = &source.binding {
+                for child in &d.children {
+                    topics.insert(substitute_site_id(&child.operating_state_topic, site_id));
+                    topics.insert(substitute_site_id(&child.state_of_charge_topic, site_id));
                 }
             }
         }
@@ -356,6 +394,11 @@ async fn read_value(
         ProtocolBinding::Synthetic(_) => {
             unreachable!("synthetic bindings are driven by the synthetic module, not read_value")
         }
+        // Distribute is command-only — it lives in x-command-source, never
+        // x-protocol-source, so the measurement poll path never sees one.
+        ProtocolBinding::Distribute(_) => {
+            unreachable!("distribute bindings are commands, never a measurement source")
+        }
     }
 }
 
@@ -384,8 +427,8 @@ fn clamp_poll_rate(value: Option<f64>, topic: &str) -> f64 {
 /// of the code (forcing intentional copies here only).
 fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
     use crate::asyncapi::types::{
-        BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding,
-        SnmpBinding, SyntheticBinding,
+        BacnetIpBinding, BacnetScBinding, DistributeBinding, Dnp3TcpBinding, ModbusTcpBinding,
+        RedfishBinding, SnmpBinding, SyntheticBinding,
     };
     match b {
         ProtocolBinding::ModbusTcp(m) => ProtocolBinding::ModbusTcp(ModbusTcpBinding {
@@ -417,6 +460,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
         ProtocolBinding::Synthetic(s) => ProtocolBinding::Synthetic(SyntheticBinding {
             operation: s.operation.clone(),
             inputs: s.inputs.clone(),
+            pairs: s.pairs.clone(),
         }),
         ProtocolBinding::BacnetIp(b) => ProtocolBinding::BacnetIp(BacnetIpBinding {
             host: b.host.clone(),
@@ -432,6 +476,10 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             object_type: b.object_type.clone(),
             object_instance: b.object_instance,
             property_id: b.property_id.clone(),
+        }),
+        ProtocolBinding::Distribute(d) => ProtocolBinding::Distribute(DistributeBinding {
+            allocation_policy: d.allocation_policy.clone(),
+            children: d.children.clone(),
         }),
     }
 }

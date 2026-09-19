@@ -22,10 +22,19 @@
 //! Frames without a `command_id` can't be correlated by the HMI, so they are
 //! logged and dropped rather than acked.
 
+pub mod allocation;
+#[cfg(test)]
+mod allocation_test;
+mod distribute;
+mod topic;
+
+pub use topic::{CommandTopic, parse_command_topic};
+
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::modbus::client as modbus;
+use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use paho_mqtt::AsyncClient;
 use serde::{Deserialize, Serialize};
@@ -58,43 +67,6 @@ pub enum Phase {
     Done,
     /// Rejected — `reason` says why.
     Failed,
-}
-
-/// Parsed identity of a commands/ topic: which device, and which command
-/// (verb + target — matched against each `x-command-source` entry's own
-/// `verb`/`target` fields, joined `{verb}_{target}` to key the lookup map).
-pub struct CommandTopic<'t> {
-    /// The device the command targets.
-    pub device_id: &'t str,
-    /// The command verb (e.g. `set`, `enable`).
-    pub verb: &'t str,
-    /// The command target within the device (e.g. `active_power`).
-    pub target: &'t str,
-}
-
-/// Parse a commands/ topic into device id + verb + target, scoped to our site.
-///
-/// Topic shape (system_adr §9):
-/// `sites/{site}/devices/{dev}/commands/{verb}/{target}/{unit}`.
-pub fn parse_command_topic<'t>(topic: &'t str, site_id: &str) -> Option<CommandTopic<'t>> {
-    let mut parts = topic.split('/');
-    if parts.next() != Some("sites")
-        || parts.next() != Some(site_id)
-        || parts.next() != Some("devices")
-    {
-        return None;
-    }
-    let device_id = parts.next().filter(|s| !s.is_empty())?;
-    if parts.next() != Some("commands") {
-        return None;
-    }
-    let verb = parts.next().filter(|s| !s.is_empty())?;
-    let target = parts.next().filter(|s| !s.is_empty())?;
-    Some(CommandTopic {
-        device_id,
-        verb,
-        target,
-    })
 }
 
 /// The events topic a device's dispatch acks ride on (mirrors the HMI's
@@ -130,6 +102,7 @@ pub async fn handle_command(
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
     creds: Option<&GatewayCredentials>,
+    cache: &InputCache,
     topic: &str,
     payload: &[u8],
 ) -> Result<()> {
@@ -195,6 +168,36 @@ pub async fn handle_command(
                 }
             }
         }
+        ProtocolBinding::Distribute(d) => {
+            match distribute::dispatch_distribute(
+                d,
+                frame.value,
+                &channel_key,
+                site_id,
+                device_channels,
+                device_trust,
+                creds,
+                cache,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch distribute succeeded");
+                    publish_event(client, &events, &frame.command_id, Phase::Done, None).await
+                }
+                Err(err) => {
+                    warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch distribute failed");
+                    publish_event(
+                        client,
+                        &events,
+                        &frame.command_id,
+                        Phase::Failed,
+                        Some(&format!("distribute failed: {err}")),
+                    )
+                    .await
+                }
+            }
+        }
         other => {
             let protocol = protocol_name(other);
             warn!(%device_id, command_id = %frame.command_id, protocol, "dispatch rejected — unsupported protocol");
@@ -220,6 +223,7 @@ fn protocol_name(binding: &ProtocolBinding) -> &'static str {
         ProtocolBinding::BacnetIp(_) => "bacnet_ip",
         ProtocolBinding::BacnetSc(_) => "bacnet_sc",
         ProtocolBinding::Synthetic(_) => "synthetic",
+        ProtocolBinding::Distribute(_) => "distribute",
     }
 }
 
@@ -245,58 +249,5 @@ async fn publish_event(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_device_verb_target_from_command_topic() {
-        // Arrange
-        let topic = "sites/s1/devices/bess_module_01/commands/set/active_power/watts";
-        // Act
-        let parsed = parse_command_topic(topic, "s1").unwrap();
-        // Assert
-        assert_eq!(parsed.device_id, "bess_module_01");
-        assert_eq!(parsed.verb, "set");
-        assert_eq!(parsed.target, "active_power");
-    }
-
-    #[test]
-    fn rejects_other_site_and_non_command_topics() {
-        // Arrange + Act + Assert — wrong site
-        assert!(parse_command_topic("sites/other/devices/d/commands/set/x/w", "s1").is_none());
-        // measurements family is not a command
-        assert!(parse_command_topic("sites/s1/devices/d/measurements/x/w", "s1").is_none());
-        // truncated topic — missing device
-        assert!(parse_command_topic("sites/s1/devices", "s1").is_none());
-        // truncated topic — missing target
-        assert!(parse_command_topic("sites/s1/devices/d/commands/set", "s1").is_none());
-    }
-
-    #[test]
-    fn event_payload_carries_contract_fields() {
-        // Arrange + Act
-        let done = event_payload("2026-07-03T00:00:00Z", "cmd-1", Phase::Done, None);
-        let failed = event_payload(
-            "2026-07-03T00:00:00Z",
-            "cmd-2",
-            Phase::Failed,
-            Some("unknown device x"),
-        );
-        // Assert — exact wire contract per dispatchEvents.ts
-        let d: serde_json::Value = serde_json::from_str(&done).unwrap();
-        assert_eq!(d["phase"], "done");
-        assert_eq!(d["command_id"], "cmd-1");
-        assert!(d.get("reason").is_none());
-        let f: serde_json::Value = serde_json::from_str(&failed).unwrap();
-        assert_eq!(f["phase"], "failed");
-        assert_eq!(f["reason"], "unknown device x");
-    }
-
-    #[test]
-    fn command_frame_requires_command_id() {
-        // Arrange — frame missing command_id (HMI can't correlate an ack)
-        let bad = br#"{"ts":"t","value":1.0}"#;
-        // Act + Assert
-        assert!(serde_json::from_slice::<CommandFrame>(bad).is_err());
-    }
-}
+#[path = "mod_test.rs"]
+mod tests;

@@ -18,4 +18,4 @@ pub mod task;
 
 pub use cache::{InputCache, new_input_cache};
 pub use operation::Operation;
-pub use task::SyntheticTaskConfig;
+pub use task::{Computation, SyntheticTaskConfig};

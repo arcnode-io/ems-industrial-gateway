@@ -78,6 +78,25 @@ fn require_nonempty(inputs: &[f64], name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Capacity-weighted mean of `(value, weight)` pairs — e.g. per-rack
+/// `state_of_charge` weighted by `capacity_kwh`, so a rack at 2x a
+/// sibling's capacity counts 2x as much. Not an `Operation` variant: every
+/// `Operation::apply` arm takes flat `&[f64]`, and this needs pairs — a
+/// separate function keeps that signature boring instead of bending it.
+pub fn weighted_mean(pairs: &[(f64, f64)]) -> Result<f64> {
+    if pairs.is_empty() {
+        return Err(anyhow!("weighted_mean requires at least one pair"));
+    }
+    let total_weight: f64 = pairs.iter().map(|(_, w)| w).sum();
+    if total_weight <= 0.0 {
+        return Err(anyhow!(
+            "weighted_mean requires a positive total weight, got {total_weight}"
+        ));
+    }
+    let weighted_sum: f64 = pairs.iter().map(|(v, w)| v * w).sum();
+    Ok(weighted_sum / total_weight)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +154,32 @@ mod tests {
         ] {
             assert!(f.apply(&[]).is_err());
         }
+    }
+
+    #[test]
+    fn weighted_mean_weights_by_capacity() {
+        // Arrange — two racks: 50% SoC at 2 MWh, 80% SoC at 1 MWh
+        let pairs = [(50.0, 2.0), (80.0, 1.0)];
+        // Act
+        let got = weighted_mean(&pairs).unwrap();
+        // Assert — (50*2 + 80*1) / (2+1) = 60.0, not the flat mean of 65.0
+        assert!((got - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn weighted_mean_with_equal_weights_matches_flat_mean() {
+        let pairs = [(10.0, 1.0), (20.0, 1.0)];
+        let got = weighted_mean(&pairs).unwrap();
+        assert!((got - 15.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn weighted_mean_rejects_empty_pairs() {
+        assert!(weighted_mean(&[]).is_err());
+    }
+
+    #[test]
+    fn weighted_mean_rejects_zero_total_weight() {
+        assert!(weighted_mean(&[(50.0, 0.0), (80.0, 0.0)]).is_err());
     }
 }

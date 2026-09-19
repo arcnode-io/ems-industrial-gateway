@@ -2,7 +2,7 @@
 
 ![](https://img.shields.io/gitlab/pipeline-status/arcnode-io/ems-industrial-gateway?branch=main&logo=gitlab)
 ![](https://gitlab.com/arcnode-io/ems-industrial-gateway/badges/main/coverage.svg)
-![](https://img.shields.io/badge/1.93-gray?logo=rust)
+![](https://img.shields.io/badge/1.98.1-gray?logo=rust)
 
 > Rust gateway translating south-side grid protocols to north-side MQTT, driven by the AsyncAPI spec served by ems-device-api.
 
@@ -27,6 +27,7 @@ Five south-side protocols plus a north-side derivation engine:
 | DNP3 TCP | dnp3 | Single-point ReadProperty on AnalogInput; optional `variation` audit field |
 | BACnet/IP | bacnet-rs | UDP 47808, single ReadProperty; devices behind a BACnet router (Loytec, Easy/IO, ABB) cover MS-TP transparently |
 | Synthetic | — | Pure-function derivations over cached MQTT inputs. See [Synthetic Derivations](#synthetic-derivations). |
+| Distribute | — | Command-only: splits one setpoint across N children via max-min fair allocation. See [Distribution](#distribution). |
 
 ## Dispatch
 
@@ -80,9 +81,63 @@ How the gateway runs it:
 
 `{device_id}` in `inputs[]` is already resolved by ems-device-api at AsyncAPI generation time; gateway only substitutes `{site_id}`.
 
+`weighted_mean` is the one operation that doesn't fit the flat `inputs[]`
+shape: `bess_module.state_of_charge` must be capacity-weighted (a rack at 2x
+a sibling's capacity counts 2x as much), so its binding carries
+`pairs: [{topic, weight}]` instead:
+
+```yaml
+state_of_charge:
+  binding:
+    protocol: synthetic
+    operation: weighted_mean
+    pairs:
+      - { topic: sites/{site_id}/devices/bess_rack_1/measurements/state_of_charge/percent, weight: 2000.0 }
+      - { topic: sites/{site_id}/devices/bess_rack_2/measurements/state_of_charge/percent, weight: 1000.0 }
+```
+
+Same cache, same hold semantic, same tick loop — just reads `(value, weight)`
+pairs instead of a flat `Vec<f64>` and calls `weighted_mean` instead of
+`Operation::apply`.
+
+## Distribution
+
+`distribute` is the command-side mirror of synthetic aggregation: a
+`bess_module`-shaped command splits one setpoint across N children (e.g. its
+`bess_rack` instances) instead of writing a single device.
+
+```json
+{
+  "protocol": "distribute",
+  "allocation_policy": "equal_split",
+  "children": [
+    { "device_id": "rack_1", "operating_state_topic": "...", "state_of_charge_topic": "...", "power_min": -4000000, "power_max": 4000000 },
+    { "device_id": "rack_2", "operating_state_topic": "...", "state_of_charge_topic": "...", "power_min": -4000000, "power_max": 4000000 }
+  ]
+}
+```
+
+`handle_command` resolves it like any other binding, then:
+
+1. **Read**: each child's cached `operating_state` + `state_of_charge` — the
+   same `InputCache` synthetic tasks read, populated by the same subscriber.
+2. **Skip**: any child that's `FAULT`/`OFFLINE`, unconditionally.
+3. **Allocate**: split the absolute target across the remaining children per
+   `allocation_policy` (`equal_split` or `soc_weighted` — SoC-proportional on
+   discharge, headroom-to-full-proportional on charge), clamp each share to
+   that child's own `[power_min, power_max]`, and redistribute any
+   clamped-off remainder among children still under their own cap, iterating
+   to convergence. This is max-min fair share (Bertsekas–Gallager) — see
+   `dispatch::allocation`.
+4. **Write**: each child's absolute share via the same per-device Modbus
+   write path a direct command uses, once per child. `Phase::Done` only after
+   every write succeeds; a failure mid-loop still leaves earlier writes
+   applied — N independent physical devices can't roll back as one
+   transaction.
+
 ## Pre-requisites
 
-- Rust 1.93+
+- Rust 1.98.1+
 - Docker (for the integration test)
 - Harbor login for `173.211.12.43:8083` (image pulls)
 
