@@ -12,7 +12,9 @@ fn config() -> EnvelopeConfig {
     }
 }
 
-const RATED_POWER: f64 = 4_000_000.0;
+/// Symmetric nameplate bounds, matching bess_rack's own bounds convention.
+const POWER_MIN: f64 = -4_000_000.0;
+const POWER_MAX: f64 = 4_000_000.0;
 const ONE_SEC: Duration = Duration::from_secs(1);
 
 fn tick(
@@ -26,7 +28,8 @@ fn tick(
         export_limit,
         active_power,
         requested_setpoint,
-        rated_power: RATED_POWER,
+        power_min: POWER_MIN,
+        power_max: POWER_MAX,
         dt: ONE_SEC,
     }
 }
@@ -161,4 +164,45 @@ fn fresh_violation_mid_ramp_immediately_re_clamps() {
     let out = ctrl.tick(tick(Some(900_000.0), None, ramped, 3_000_000.0));
     // Assert — instant re-clamp to the new, tighter ceiling
     assert_eq!(out, Some(900_000.0));
+}
+
+#[test]
+fn ramp_step_is_direction_dependent_on_asymmetric_bounds() {
+    // Arrange — small charge capacity, large discharge capacity: ramping
+    // toward import (positive) should use power_max, toward export
+    // (negative) should use power_min's magnitude — two different rates.
+    let small_min = -1_000_000.0;
+    let large_max = 4_000_000.0;
+    let asymmetric_tick =
+        |import_limit, export_limit, active_power, requested_setpoint| EnvelopeTick {
+            import_limit,
+            export_limit,
+            active_power,
+            requested_setpoint,
+            power_min: small_min,
+            power_max: large_max,
+            dt: ONE_SEC,
+        };
+
+    // Act — ramp toward import (positive): max_step = 0.10 * 4_000_000 = 400_000
+    let mut import_ctrl = EnvelopeController::new(config(), 0.0);
+    import_ctrl.tick(asymmetric_tick(Some(0.0), None, 0.0, 1_000_000.0));
+    for _ in 0..29 {
+        import_ctrl.tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, 1_000_000.0));
+    }
+    let import_step = import_ctrl
+        .tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, 1_000_000.0))
+        .unwrap();
+    assert!((import_step - 400_000.0).abs() < f64::EPSILON);
+
+    // Act — ramp toward export (negative): max_step = 0.10 * 1_000_000 = 100_000
+    let mut export_ctrl = EnvelopeController::new(config(), 0.0);
+    export_ctrl.tick(asymmetric_tick(None, Some(0.0), 0.0, -1_000_000.0));
+    for _ in 0..29 {
+        export_ctrl.tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, -1_000_000.0));
+    }
+    let export_step = export_ctrl
+        .tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, -1_000_000.0))
+        .unwrap();
+    assert!((export_step - -100_000.0).abs() < f64::EPSILON);
 }

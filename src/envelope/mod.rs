@@ -3,8 +3,12 @@
 //! only self-triggering write path in the gateway (everything else only
 //! ever writes in direct response to an inbound MQTT command).
 //!
-//! See `control_law` for the pure ramp/hysteresis/clamp state machine.
+//! See `control_law` for the pure ramp/hysteresis/clamp state machine and
+//! `task` for the per-module tick loop + `distribute`-binding wire parsing.
 
 pub mod control_law;
 #[cfg(test)]
 mod control_law_test;
+pub mod task;
+
+pub use task::{EnvelopeGuardConfig, EnvelopeTaskConfig, envelope_guard_config};

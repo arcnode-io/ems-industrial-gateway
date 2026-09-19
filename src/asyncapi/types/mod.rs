@@ -303,5 +303,40 @@ mod tests {
         assert_eq!(b.children.len(), 1);
         assert_eq!(b.children[0].device_id, "bess_rack_1");
         assert!((b.children[0].power_max - 4_000_000.0).abs() < f64::EPSILON);
+        // Plain distribute — no envelope-guard fields.
+        assert_eq!(b.ramp_rate_per_sec, None);
+    }
+
+    #[test]
+    fn deserialize_distribute_binding_with_envelope_guard_fields() {
+        // Arrange — bess_module's set_active_power, envelope-guarded.
+        let json = r#"{
+            "verb": "set",
+            "target": "active_power",
+            "unit": "watts",
+            "protocol": "distribute",
+            "allocation_policy": "equal_split",
+            "ramp_rate_per_sec": 0.10,
+            "hysteresis_margin": 0.05,
+            "hysteresis_dwell_secs": 30.0,
+            "power_min": -4000000.0,
+            "power_max": 4000000.0,
+            "import_limit_topic": "sites/{site_id}/devices/operating_envelope/measurements/import_limit/watts",
+            "export_limit_topic": "sites/{site_id}/devices/operating_envelope/measurements/export_limit/watts",
+            "active_power_topic": "sites/{site_id}/devices/bess_module_1/measurements/active_power/watts",
+            "children": []
+        }"#;
+        // Act
+        let src: CommandSource = serde_json::from_str(json).unwrap();
+        // Assert
+        let ProtocolBinding::Distribute(b) = src.binding else {
+            panic!("expected Distribute variant");
+        };
+        assert_eq!(b.ramp_rate_per_sec, Some(0.10));
+        assert_eq!(b.hysteresis_dwell_secs, Some(30.0));
+        assert_eq!(
+            b.active_power_topic.as_deref(),
+            Some("sites/{site_id}/devices/bess_module_1/measurements/active_power/watts")
+        );
     }
 }

@@ -204,7 +204,7 @@ pub async fn handle_command(
 /// (`handle_command`, above) and the envelope actuation loop — whichever
 /// calls this, the underlying write is identical.
 #[allow(clippy::too_many_arguments)]
-async fn execute_setpoint(
+pub(crate) async fn execute_setpoint(
     binding: &ProtocolBinding,
     value: f64,
     device_id: &str,

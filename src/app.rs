@@ -17,6 +17,7 @@ use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::{Config, GatewayCredentials};
 use crate::dispatch;
 use crate::dnp3::client as dnp3;
+use crate::envelope;
 use crate::http::client::fetch_asyncapi;
 use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
@@ -105,8 +106,15 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     )
     .await?;
 
-    let (mut task_handles, mut task_cancel) =
-        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
+    let (mut task_handles, mut task_cancel) = spawn_task_set(
+        &initial_spec,
+        &cfg,
+        client.clone(),
+        cache.clone(),
+        last_requested.clone(),
+        device_channels_map.clone(),
+        device_trust_map.clone(),
+    );
 
     loop {
         tokio::select! {
@@ -128,7 +136,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                         warn!(error = %e, "respawn fetch failed; keeping current task set");
                         // Re-spawn the old set so we don't end up idle.
                         let (h, c) =
-                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
+                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
                         task_handles = h;
                         task_cancel = c;
                         continue;
@@ -142,12 +150,12 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                 {
                     warn!(error = %e, "new spec fails trust/creds alignment; keeping current task set");
                     let (h, c) =
-                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone());
+                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
                     task_handles = h;
                     task_cancel = c;
                     continue;
                 }
-                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone());
+                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
                 task_handles = h;
                 task_cancel = c;
             }
@@ -186,16 +194,21 @@ fn device_channels(spec: &AsyncApiSpec) -> HashMap<String, HashMap<String, Proto
 /// (no south-side poll); all others go through the protocol-poll path.
 /// Returns a `JoinSet` of handles and the parent `CancellationToken` used to
 /// stop them en masse on reconcile.
+#[allow(clippy::too_many_arguments)]
 fn spawn_task_set(
     spec: &AsyncApiSpec,
     cfg: &Config,
     client: paho_mqtt::AsyncClient,
     cache: InputCache,
+    last_requested: dispatch::LastRequestedSetpoints,
+    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+    device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
 ) -> (JoinSet<()>, CancellationToken) {
     let parent = CancellationToken::new();
     let mut handles = JoinSet::new();
     let mut spawned_poll = 0usize;
     let mut spawned_synthetic = 0usize;
+    let mut spawned_envelope = 0usize;
     for (device_id, channels) in &spec.x_protocol_source {
         for (measurement, source) in channels {
             let task_cancel = parent.child_token();
@@ -246,7 +259,59 @@ fn spawn_task_set(
             info!(%device_id, %measurement, %topic, poll_rate, "poll task spawned");
         }
     }
-    info!(spawned_poll, spawned_synthetic, "task set built");
+    for (device_id, commands) in &spec.x_command_source {
+        for source in commands.values() {
+            let ProtocolBinding::Distribute(d) = &source.binding else {
+                continue;
+            };
+            let Some(guard_config) = envelope::envelope_guard_config(d) else {
+                continue; // plain, unguarded distribute — nothing to actuate
+            };
+            let channel_key = format!("{}_{}", source.verb, source.target);
+            let guard = envelope::EnvelopeGuardConfig {
+                import_limit_topic: substitute_site_id(
+                    &guard_config.import_limit_topic,
+                    &cfg.site_id,
+                ),
+                export_limit_topic: substitute_site_id(
+                    &guard_config.export_limit_topic,
+                    &cfg.site_id,
+                ),
+                active_power_topic: substitute_site_id(
+                    &guard_config.active_power_topic,
+                    &cfg.site_id,
+                ),
+                ..guard_config
+            };
+            let task_cfg = envelope::EnvelopeTaskConfig {
+                device_id: device_id.clone(),
+                channel_key: channel_key.clone(),
+                guard,
+                binding: clone_binding(&source.binding),
+                tick_hz: DEFAULT_POLL_HZ,
+            };
+            let handle = envelope::task::spawn(
+                task_cfg,
+                cfg.site_id.clone(),
+                cache.clone(),
+                last_requested.clone(),
+                device_channels.clone(),
+                device_trust.clone(),
+                cfg.gateway_credentials.clone(),
+                parent.child_token(),
+            );
+            handles.spawn(async move {
+                let _ = handle.await;
+            });
+            spawned_envelope += 1;
+            info!(%device_id, %channel_key, "envelope actuation task spawned");
+        }
+    }
+
+    info!(
+        spawned_poll,
+        spawned_synthetic, spawned_envelope, "task set built"
+    );
     (handles, parent)
 }
 
@@ -329,6 +394,11 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                 for child in &d.children {
                     topics.insert(substitute_site_id(&child.operating_state_topic, site_id));
                     topics.insert(substitute_site_id(&child.state_of_charge_topic, site_id));
+                }
+                if let Some(guard) = envelope::envelope_guard_config(d) {
+                    topics.insert(substitute_site_id(&guard.import_limit_topic, site_id));
+                    topics.insert(substitute_site_id(&guard.export_limit_topic, site_id));
+                    topics.insert(substitute_site_id(&guard.active_power_topic, site_id));
                 }
             }
         }
@@ -487,6 +557,14 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
         ProtocolBinding::Distribute(d) => ProtocolBinding::Distribute(DistributeBinding {
             allocation_policy: d.allocation_policy.clone(),
             children: d.children.clone(),
+            ramp_rate_per_sec: d.ramp_rate_per_sec,
+            hysteresis_margin: d.hysteresis_margin,
+            hysteresis_dwell_secs: d.hysteresis_dwell_secs,
+            power_min: d.power_min,
+            power_max: d.power_max,
+            import_limit_topic: d.import_limit_topic.clone(),
+            export_limit_topic: d.export_limit_topic.clone(),
+            active_power_topic: d.active_power_topic.clone(),
         }),
     }
 }

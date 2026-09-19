@@ -68,9 +68,14 @@ pub struct EnvelopeTick {
     pub active_power: f64,
     /// The last real operator/dispatcher setpoint request — the ramp target.
     pub requested_setpoint: f64,
-    /// Module's rated (nameplate) power — ramp rate and hysteresis margin
-    /// are both fractions of this.
-    pub rated_power: f64,
+    /// Module's own static nameplate lower bound (e.g. max charge; negative).
+    /// Ramp rate and hysteresis margin on the export side are fractions of
+    /// its magnitude.
+    pub power_min: f64,
+    /// Module's own static nameplate upper bound (e.g. max discharge;
+    /// positive). Ramp rate and hysteresis margin on the import side are
+    /// fractions of this.
+    pub power_max: f64,
     /// Time since the previous tick.
     pub dt: Duration,
 }
@@ -108,8 +113,9 @@ impl EnvelopeController {
         }
 
         if self.mode == Mode::Constrained {
-            let margin = self.config.hysteresis_margin * input.rated_power;
-            if headroom_import >= margin && headroom_export >= margin {
+            let margin_import = self.config.hysteresis_margin * input.power_max;
+            let margin_export = self.config.hysteresis_margin * input.power_min.abs();
+            if headroom_import >= margin_import && headroom_export >= margin_export {
                 self.dwell_elapsed += input.dt;
                 if self.dwell_elapsed >= self.config.hysteresis_dwell {
                     self.mode = Mode::Ramping;
@@ -131,10 +137,17 @@ impl EnvelopeController {
             // — never write past a known limit regardless of mode.
             Mode::Normal => self.write(input.requested_setpoint.clamp(floor, ceiling)),
             Mode::Ramping => {
-                let max_step =
-                    self.config.ramp_rate_per_sec * input.rated_power * input.dt.as_secs_f64();
                 let target = input.requested_setpoint.clamp(floor, ceiling);
                 let delta = target - self.current_output;
+                // Rated power is direction-dependent: ramping toward
+                // import (positive) draws on power_max, toward export
+                // (negative) on power_min's magnitude.
+                let rated = if delta >= 0.0 {
+                    input.power_max
+                } else {
+                    input.power_min.abs()
+                };
+                let max_step = self.config.ramp_rate_per_sec * rated * input.dt.as_secs_f64();
                 let next = if delta.abs() <= max_step {
                     self.mode = Mode::Normal;
                     target

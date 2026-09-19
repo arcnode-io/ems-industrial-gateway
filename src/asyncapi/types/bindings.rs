@@ -136,12 +136,43 @@ pub struct WeightedPair {
 /// Command-distribution binding: a `bess_module`-style command splits one
 /// setpoint across N children (e.g. `bess_rack` instances) via a max-min
 /// fair allocation policy. See `dispatch::allocation`.
+///
+/// The eight fields below `children` are envelope-guard config — all
+/// present together, or all absent, per `envelope::envelope_guard_config`.
+/// A plain distribute binding (no envelope guard) has none of them; nothing
+/// about a device's own `set_active_power` command changes shape depending
+/// on whether it's envelope-guarded.
 #[derive(Debug, Deserialize)]
 pub struct DistributeBinding {
     /// Allocation policy name: `equal_split` or `soc_weighted`.
     pub allocation_policy: String,
     /// Fully-resolved children to distribute the setpoint across.
     pub children: Vec<ChildAllocation>,
+    /// Ramp rate on recovery, as a fraction of rated power per second.
+    #[serde(default)]
+    pub ramp_rate_per_sec: Option<f64>,
+    /// Required headroom margin to close a constrained event, as a
+    /// fraction of rated power.
+    #[serde(default)]
+    pub hysteresis_margin: Option<f64>,
+    /// How long that margin must hold continuously before closing the event.
+    #[serde(default)]
+    pub hysteresis_dwell_secs: Option<f64>,
+    /// The module's own static lower bound (`active_power.bounds.min`).
+    #[serde(default)]
+    pub power_min: Option<f64>,
+    /// The module's own static upper bound (`active_power.bounds.max`).
+    #[serde(default)]
+    pub power_max: Option<f64>,
+    /// MQTT topic carrying the live `operating_envelope.import_limit`.
+    #[serde(default)]
+    pub import_limit_topic: Option<String>,
+    /// MQTT topic carrying the live `operating_envelope.export_limit`.
+    #[serde(default)]
+    pub export_limit_topic: Option<String>,
+    /// MQTT topic carrying the module's own live `active_power` reading.
+    #[serde(default)]
+    pub active_power_topic: Option<String>,
 }
 
 /// One child's identity + static bounds for command distribution.
