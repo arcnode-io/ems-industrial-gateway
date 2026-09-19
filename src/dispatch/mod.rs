@@ -35,12 +35,22 @@ use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::modbus::client as modbus;
 use crate::synthetic::InputCache;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use paho_mqtt::AsyncClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Per-device, per-`{verb}_{target}` last real operator/dispatcher setpoint
+/// request — captured in `handle_command` before any envelope clamp, so the
+/// (future) envelope actuation loop always has a real value to ramp back
+/// toward. The envelope loop's own writes go through `execute_setpoint`
+/// directly, never through `handle_command`, so they can never overwrite
+/// this — see `envelope` module docs.
+pub type LastRequestedSetpoints = Arc<RwLock<HashMap<String, HashMap<String, f64>>>>;
 
 /// QoS for dispatch lifecycle events — at-least-once, same as the commands
 /// family they answer (ADR-002 §11).
@@ -103,6 +113,7 @@ pub async fn handle_command(
     device_trust: &HashMap<String, DeviceTrust>,
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
+    last_requested: &RwLock<HashMap<String, HashMap<String, f64>>>,
     topic: &str,
     payload: &[u8],
 ) -> Result<()> {
@@ -147,32 +158,73 @@ pub async fn handle_command(
         .await;
     };
 
+    // Real operator/dispatcher request — capture before dispatching. See
+    // `LastRequestedSetpoints` docs for why this must be the only writer.
+    last_requested
+        .write()
+        .await
+        .entry(device_id.to_string())
+        .or_default()
+        .insert(channel_key.clone(), frame.value);
+
+    match execute_setpoint(
+        binding,
+        frame.value,
+        device_id,
+        &channel_key,
+        site_id,
+        device_channels,
+        device_trust,
+        creds,
+        cache,
+    )
+    .await
+    {
+        Ok(()) => {
+            info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch write succeeded");
+            publish_event(client, &events, &frame.command_id, Phase::Done, None).await
+        }
+        Err(err) => {
+            warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch write failed");
+            publish_event(
+                client,
+                &events,
+                &frame.command_id,
+                Phase::Failed,
+                Some(&format!("{err}")),
+            )
+            .await
+        }
+    }
+}
+
+/// Dispatch `value` through whatever `binding` actually is — Modbus TCP
+/// writes directly, Distribute fans out via max-min fair allocation. The
+/// one south-side write mechanism shared by real inbound commands
+/// (`handle_command`, above) and the envelope actuation loop — whichever
+/// calls this, the underlying write is identical.
+#[allow(clippy::too_many_arguments)]
+async fn execute_setpoint(
+    binding: &ProtocolBinding,
+    value: f64,
+    device_id: &str,
+    channel_key: &str,
+    site_id: &str,
+    device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
+    device_trust: &HashMap<String, DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+    cache: &InputCache,
+) -> Result<()> {
     match binding {
         ProtocolBinding::ModbusTcp(b) => {
             let trust = device_trust.get(device_id);
-            match modbus::write_setpoint(b, frame.value, trust, creds).await {
-                Ok(()) => {
-                    info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch write succeeded");
-                    publish_event(client, &events, &frame.command_id, Phase::Done, None).await
-                }
-                Err(err) => {
-                    warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch write failed");
-                    publish_event(
-                        client,
-                        &events,
-                        &frame.command_id,
-                        Phase::Failed,
-                        Some(&format!("modbus write failed: {err}")),
-                    )
-                    .await
-                }
-            }
+            modbus::write_setpoint(b, value, trust, creds).await
         }
         ProtocolBinding::Distribute(d) => {
-            match distribute::dispatch_distribute(
+            distribute::dispatch_distribute(
                 d,
-                frame.value,
-                &channel_key,
+                value,
+                channel_key,
                 site_id,
                 device_channels,
                 device_trust,
@@ -180,36 +232,11 @@ pub async fn handle_command(
                 cache,
             )
             .await
-            {
-                Ok(()) => {
-                    info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch distribute succeeded");
-                    publish_event(client, &events, &frame.command_id, Phase::Done, None).await
-                }
-                Err(err) => {
-                    warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch distribute failed");
-                    publish_event(
-                        client,
-                        &events,
-                        &frame.command_id,
-                        Phase::Failed,
-                        Some(&format!("distribute failed: {err}")),
-                    )
-                    .await
-                }
-            }
         }
-        other => {
-            let protocol = protocol_name(other);
-            warn!(%device_id, command_id = %frame.command_id, protocol, "dispatch rejected — unsupported protocol");
-            publish_event(
-                client,
-                &events,
-                &frame.command_id,
-                Phase::Failed,
-                Some(&format!("unsupported protocol for commands: {protocol}")),
-            )
-            .await
-        }
+        other => Err(anyhow!(
+            "unsupported protocol for commands: {}",
+            protocol_name(other)
+        )),
     }
 }
 

@@ -15,6 +15,7 @@ use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
 use crate::bacnet::client as bacnet;
 use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::{Config, GatewayCredentials};
+use crate::dispatch;
 use crate::dnp3::client as dnp3;
 use crate::http::client::fetch_asyncapi;
 use crate::modbus::client as modbus;
@@ -87,6 +88,11 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // successful spec re-fetch so accepts/rejects/writes track live topology.
     let device_channels_map = Arc::new(RwLock::new(device_channels(&initial_spec)));
     let device_trust_map = Arc::new(RwLock::new(initial_spec.x_device_trust.clone()));
+    // Last real operator/dispatcher setpoint per (device, command) — the
+    // envelope actuation loop's ramp-back target. Empty at boot; populated
+    // as real commands arrive. Not reset on reconcile (a topology refresh
+    // shouldn't forget what an operator most recently asked for).
+    let last_requested: dispatch::LastRequestedSetpoints = Arc::new(RwLock::new(HashMap::new()));
     let mut beacon_rx = subscriber::subscribe(
         &mut client,
         &input_topics,
@@ -95,6 +101,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         device_channels_map.clone(),
         device_trust_map.clone(),
         cfg.gateway_credentials.clone(),
+        last_requested.clone(),
     )
     .await?;
 

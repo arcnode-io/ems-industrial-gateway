@@ -10,7 +10,7 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
-use crate::dispatch;
+use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
@@ -60,6 +60,7 @@ pub async fn subscribe(
     device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
     device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
     creds: Option<GatewayCredentials>,
+    last_requested: LastRequestedSetpoints,
 ) -> Result<watch::Receiver<u64>> {
     let mut stream = client.get_stream(STREAM_CAPACITY);
     client
@@ -113,6 +114,7 @@ pub async fn subscribe(
                     &trust,
                     creds.as_ref(),
                     &cache,
+                    &last_requested,
                     msg.topic(),
                     msg.payload(),
                 )

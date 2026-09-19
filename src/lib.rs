@@ -9,6 +9,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod dispatch;
 pub mod dnp3;
+pub mod envelope;
 pub mod http;
 pub mod modbus;
 pub mod mqtt;

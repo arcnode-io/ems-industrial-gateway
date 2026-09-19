@@ -101,6 +101,7 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
         channels,
         Arc::new(RwLock::new(HashMap::new())),
         None,
+        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
 
@@ -174,6 +175,7 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
         channels,
         Arc::new(RwLock::new(HashMap::new())),
         None,
+        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
     let mut operator =
@@ -215,6 +217,7 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
         channels,
         Arc::new(RwLock::new(HashMap::new())),
         None,
+        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
     let mut operator =
