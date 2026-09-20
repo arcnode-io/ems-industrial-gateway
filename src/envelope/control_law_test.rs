@@ -35,6 +35,22 @@ fn tick(
 }
 
 #[test]
+fn current_output_reflects_last_committed_value_even_when_tick_returns_none() {
+    // Arrange — a tick that changes the output, then one that doesn't.
+    let mut ctrl = EnvelopeController::new(config(), 0.0);
+    let changed = ctrl.tick(tick(Some(10_000_000.0), Some(10_000_000.0), 0.0, 500_000.0));
+    assert_eq!(changed, Some(500_000.0));
+    assert_eq!(ctrl.current_output(), 500_000.0);
+
+    // Act — identical inputs: tick() reports no change...
+    let unchanged = ctrl.tick(tick(Some(10_000_000.0), Some(10_000_000.0), 0.0, 500_000.0));
+    // Assert — ...but current_output still reflects the real committed value,
+    // which a rebalance caller needs even on a tick where nothing changed.
+    assert_eq!(unchanged, None);
+    assert_eq!(ctrl.current_output(), 500_000.0);
+}
+
+#[test]
 fn normal_mode_tracks_requested_setpoint_when_unconstrained() {
     // Arrange — generous limits, well within bounds
     let mut ctrl = EnvelopeController::new(config(), 0.0);

@@ -264,25 +264,28 @@ fn spawn_task_set(
             let ProtocolBinding::Distribute(d) = &source.binding else {
                 continue;
             };
-            let Some(guard_config) = envelope::envelope_guard_config(d) else {
-                continue; // plain, unguarded distribute — nothing to actuate
-            };
+            // Every distribute binding gets a rebalance task — guarded ones
+            // also get the envelope clamp on top; a plain distribute just
+            // rebalances its child split on drift with no clamp.
+            let guard = envelope::envelope_guard_config(d).map(|guard_config| {
+                envelope::EnvelopeGuardConfig {
+                    import_limit_topic: substitute_site_id(
+                        &guard_config.import_limit_topic,
+                        &cfg.site_id,
+                    ),
+                    export_limit_topic: substitute_site_id(
+                        &guard_config.export_limit_topic,
+                        &cfg.site_id,
+                    ),
+                    active_power_topic: substitute_site_id(
+                        &guard_config.active_power_topic,
+                        &cfg.site_id,
+                    ),
+                    ..guard_config
+                }
+            });
+            let guarded = guard.is_some();
             let channel_key = format!("{}_{}", source.verb, source.target);
-            let guard = envelope::EnvelopeGuardConfig {
-                import_limit_topic: substitute_site_id(
-                    &guard_config.import_limit_topic,
-                    &cfg.site_id,
-                ),
-                export_limit_topic: substitute_site_id(
-                    &guard_config.export_limit_topic,
-                    &cfg.site_id,
-                ),
-                active_power_topic: substitute_site_id(
-                    &guard_config.active_power_topic,
-                    &cfg.site_id,
-                ),
-                ..guard_config
-            };
             let task_cfg = envelope::EnvelopeTaskConfig {
                 device_id: device_id.clone(),
                 channel_key: channel_key.clone(),
@@ -304,7 +307,7 @@ fn spawn_task_set(
                 let _ = handle.await;
             });
             spawned_envelope += 1;
-            info!(%device_id, %channel_key, "envelope actuation task spawned");
+            info!(%device_id, %channel_key, guarded, "distribute rebalance task spawned");
         }
     }
 

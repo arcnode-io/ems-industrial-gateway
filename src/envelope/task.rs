@@ -1,9 +1,12 @@
-//! One async task per envelope-guarded `distribute` command: ticks at 1 Hz
-//! (matching `active_power`'s poll rate), runs `EnvelopeController`, and
-//! writes any resulting setpoint change via `dispatch::execute_setpoint` —
-//! bypassing `handle_command`'s last-requested-setpoint capture entirely,
-//! so the envelope loop's own clamped writes can never look like a new
-//! real operator request.
+//! One async task per `distribute` command (envelope-guarded or plain):
+//! ticks at 1 Hz (matching `active_power`'s poll rate), always recomputes
+//! the SoC-weighted child split from the current requested setpoint (a
+//! child's SoC drifting is enough to rebalance the split even when the
+//! module-level target hasn't changed), applies the envelope control law's
+//! clamp on top when guarded, and writes only the children whose share
+//! actually changed since the last tick — bypassing `handle_command`'s
+//! last-requested-setpoint capture entirely, so this task's own writes can
+//! never look like a new real operator request.
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
@@ -56,17 +59,20 @@ pub fn envelope_guard_config(d: &DistributeBinding) -> Option<EnvelopeGuardConfi
     })
 }
 
-/// Everything one envelope task needs to run forever.
+/// Everything one rebalance/envelope task needs to run forever.
 pub struct EnvelopeTaskConfig {
-    /// The module device this task guards.
+    /// The device (module, or a future site-level virtual parent) this task
+    /// distributes for.
     pub device_id: String,
     /// `{verb}_{target}` key into `device_channels`/`last_requested`.
     pub channel_key: String,
-    /// The full (already `{site_id}`-substituted) guard config.
-    pub guard: EnvelopeGuardConfig,
-    /// The module's own distribute binding — passed to `execute_setpoint`
-    /// unchanged; the envelope loop only ever changes what *value* gets
-    /// dispatched through it, never the binding itself.
+    /// `Some` for an envelope-guarded distribute (headroom clamp applies);
+    /// `None` for a plain distribute — every tick still rebalances the
+    /// child split, just with no clamp on top.
+    pub guard: Option<EnvelopeGuardConfig>,
+    /// The distribute binding this task rebalances. Must be
+    /// `ProtocolBinding::Distribute` — the only kind of binding this task
+    /// is ever spawned for.
     pub binding: ProtocolBinding,
     /// Tick cadence — matches the module's `active_power` poll rate (1 Hz).
     pub tick_hz: f64,
@@ -91,7 +97,14 @@ pub fn spawn(
         // The initial requested_setpoint (before any real command has ever
         // arrived) is 0.0 — conservative: nothing to ramp toward yet, and a
         // real command populates `last_requested` before this could matter.
-        let mut controller = EnvelopeController::new(cfg.guard.control, 0.0);
+        let mut controller = cfg
+            .guard
+            .as_ref()
+            .map(|g| EnvelopeController::new(g.control, 0.0));
+        // Last share actually written per child — lets a tick where the
+        // module-level target is unchanged still write only the children
+        // whose own SoC-weighted share drifted, and skip the rest.
+        let mut last_written: HashMap<String, f64> = HashMap::new();
         let mut last_tick = Instant::now();
         loop {
             tokio::select! {
@@ -103,6 +116,7 @@ pub fn spawn(
                     tick_once(
                         &cfg,
                         &mut controller,
+                        &mut last_written,
                         dt,
                         &site_id,
                         &cache,
@@ -118,13 +132,17 @@ pub fn spawn(
     })
 }
 
-/// One tick: read live cache state, advance the controller, and write any
-/// resulting change. Holds (does nothing) until every required cache entry
-/// has landed — same posture as a synthetic task's hold semantic.
+/// One tick: resolve this tick's module-level target (clamped, for a
+/// guarded task; the raw requested setpoint otherwise), recompute the
+/// SoC-weighted child split fresh from live cache state, and write only the
+/// children whose share actually changed. Holds (does nothing) until every
+/// required cache entry has landed — same posture as a synthetic task's
+/// hold semantic.
 #[allow(clippy::too_many_arguments)]
 async fn tick_once(
     cfg: &EnvelopeTaskConfig,
-    controller: &mut EnvelopeController,
+    controller: &mut Option<EnvelopeController>,
+    last_written: &mut HashMap<String, f64>,
     dt: Duration,
     site_id: &str,
     cache: &InputCache,
@@ -133,15 +151,6 @@ async fn tick_once(
     device_trust: &Arc<RwLock<HashMap<String, DeviceTrust>>>,
     creds: Option<&GatewayCredentials>,
 ) {
-    let active_power_topic = cfg.guard.active_power_topic.replace("{site_id}", site_id);
-    let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
-        return; // hold — no active_power reading cached yet
-    };
-    let import_limit_topic = cfg.guard.import_limit_topic.replace("{site_id}", site_id);
-    let export_limit_topic = cfg.guard.export_limit_topic.replace("{site_id}", site_id);
-    let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
-    let export_limit = cache.get(&export_limit_topic).map(|e| e.0);
-
     let requested_setpoint = last_requested
         .read()
         .await
@@ -150,38 +159,68 @@ async fn tick_once(
         .copied()
         .unwrap_or(0.0);
 
-    let Some(new_setpoint) = controller.tick(EnvelopeTick {
-        import_limit,
-        export_limit,
-        active_power,
-        requested_setpoint,
-        power_min: cfg.guard.power_min,
-        power_max: cfg.guard.power_max,
-        dt,
-    }) else {
-        return; // unchanged this tick
+    let target = match (&cfg.guard, controller.as_mut()) {
+        (Some(guard), Some(ctrl)) => {
+            let active_power_topic = guard.active_power_topic.replace("{site_id}", site_id);
+            let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
+                return; // hold — no active_power reading cached yet
+            };
+            let import_limit_topic = guard.import_limit_topic.replace("{site_id}", site_id);
+            let export_limit_topic = guard.export_limit_topic.replace("{site_id}", site_id);
+            let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
+            let export_limit = cache.get(&export_limit_topic).map(|e| e.0);
+            // The clamped/ramped value either way — `tick`'s Some/None only
+            // says whether it *changed* this tick, but the rebalance below
+            // needs the current target regardless.
+            ctrl.tick(EnvelopeTick {
+                import_limit,
+                export_limit,
+                active_power,
+                requested_setpoint,
+                power_min: guard.power_min,
+                power_max: guard.power_max,
+                dt,
+            });
+            ctrl.current_output()
+        }
+        _ => requested_setpoint,
     };
+
+    let ProtocolBinding::Distribute(d) = &cfg.binding else {
+        warn!(device_id = %cfg.device_id, "rebalance task's binding is not distribute; nothing to do");
+        return;
+    };
+    let shares = match dispatch::compute_shares(d, target, site_id, cache) {
+        Ok(s) => s,
+        Err(_) => return, // hold — same posture as missing cache inputs above
+    };
+    let changed: Vec<(String, f64)> = shares
+        .into_iter()
+        .filter(|(id, share)| {
+            last_written
+                .get(id)
+                .is_none_or(|prev| (share - prev).abs() >= f64::EPSILON)
+        })
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
 
     let channels = device_channels.read().await;
     let trust = device_trust.read().await;
-    if let Err(err) = dispatch::execute_setpoint(
-        &cfg.binding,
-        new_setpoint,
-        &cfg.device_id,
-        &cfg.channel_key,
-        site_id,
-        &channels,
-        &trust,
-        creds,
-        cache,
-    )
-    .await
-    {
-        warn!(
-            device_id = %cfg.device_id,
-            value = new_setpoint,
-            error = %err,
-            "envelope actuation write failed",
-        );
+    match dispatch::write_shares(&changed, &cfg.channel_key, &channels, &trust, creds).await {
+        Ok(()) => {
+            for (id, share) in changed {
+                last_written.insert(id, share);
+            }
+        }
+        Err(err) => {
+            warn!(
+                device_id = %cfg.device_id,
+                target,
+                error = %err,
+                "rebalance write failed",
+            );
+        }
     }
 }

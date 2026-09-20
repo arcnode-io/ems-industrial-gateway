@@ -10,14 +10,11 @@ use crate::synthetic::InputCache;
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 
-/// Resolve + execute a distribute command: read each child's cached
-/// `operating_state`/`state_of_charge`, allocate `target` across eligible
-/// children (max-min fair share), and write each child's absolute share via
-/// Phase 0's Modbus write path — the same `(device_id, verb+target)` →
-/// `Binding` lookup the module's own command used, since children share
-/// verb+target with the module for the same physical quantity. Stops at the
-/// first write failure; earlier writes in the loop have already landed —
-/// N independent physical devices can't be rolled back as one transaction.
+/// Resolve + execute a distribute command: `compute_shares` then
+/// `write_shares` for every child. The reactive path (a real inbound
+/// command) always writes every eligible child; the rebalance-tick path
+/// (`envelope::task`) calls the two halves separately so it can write only
+/// the children whose share actually changed since the last tick.
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_distribute(
     binding: &DistributeBinding,
@@ -29,6 +26,20 @@ pub async fn dispatch_distribute(
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
 ) -> Result<()> {
+    let shares = compute_shares(binding, target, site_id, cache)?;
+    write_shares(&shares, channel_key, device_channels, device_trust, creds).await
+}
+
+/// Read each child's cached `operating_state`/`state_of_charge` and allocate
+/// `target` across eligible children (max-min fair share). Pure aside from
+/// the cache reads — no I/O, no writes. Errors if resolving any child's cache
+/// entry fails, or no child ends up eligible.
+pub fn compute_shares(
+    binding: &DistributeBinding,
+    target: f64,
+    site_id: &str,
+    cache: &InputCache,
+) -> Result<Vec<(String, f64)>> {
     let policy = AllocationPolicy::parse(&binding.allocation_policy)?;
     let children: Vec<ChildCapacity> = binding
         .children
@@ -39,9 +50,24 @@ pub async fn dispatch_distribute(
     if shares.is_empty() {
         return Err(anyhow!("no eligible children to distribute to"));
     }
+    Ok(shares)
+}
+
+/// Write each `(device_id, share)` via the same `(device_id, verb+target)` →
+/// `Binding` lookup the module's own command used, since children share
+/// verb+target with the module for the same physical quantity. Stops at the
+/// first write failure; earlier writes in the loop have already landed —
+/// N independent physical devices can't be rolled back as one transaction.
+pub async fn write_shares(
+    shares: &[(String, f64)],
+    channel_key: &str,
+    device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
+    device_trust: &HashMap<String, DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<()> {
     for (device_id, share) in shares {
         let binding = device_channels
-            .get(&device_id)
+            .get(device_id)
             .and_then(|chs| chs.get(channel_key))
             .ok_or_else(|| anyhow!("child {device_id} has no {channel_key} binding"))?;
         let ProtocolBinding::ModbusTcp(b) = binding else {
@@ -49,8 +75,8 @@ pub async fn dispatch_distribute(
                 "child {device_id}'s {channel_key} binding is not modbus_tcp"
             ));
         };
-        let trust = device_trust.get(&device_id);
-        modbus::write_setpoint(b, share, trust, creds)
+        let trust = device_trust.get(device_id);
+        modbus::write_setpoint(b, *share, trust, creds)
             .await
             .with_context(|| format!("write to child {device_id} failed"))?;
     }
@@ -160,5 +186,55 @@ mod tests {
     #[test]
     fn operating_state_from_f64_rejects_out_of_range() {
         assert!(operating_state_from_f64(5.0).is_err());
+    }
+
+    #[test]
+    fn compute_shares_splits_equally_across_two_standby_children() {
+        // Arrange — two racks, equal SoC, equal_split policy.
+        let cache = new_input_cache();
+        for rack in ["rack_1", "rack_2"] {
+            cache.insert(
+                format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
+                (0.0, Instant::now()),
+            );
+            cache.insert(
+                format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
+                (50.0, Instant::now()),
+            );
+        }
+        let child = |id: &str| ChildAllocation {
+            device_id: id.to_string(),
+            operating_state_topic: format!(
+                "sites/{{site_id}}/devices/{id}/measurements/operating_state/none"
+            ),
+            state_of_charge_topic: format!(
+                "sites/{{site_id}}/devices/{id}/measurements/state_of_charge/percent"
+            ),
+            power_min: -4_000_000.0,
+            power_max: 4_000_000.0,
+        };
+        let binding = DistributeBinding {
+            allocation_policy: "equal_split".to_string(),
+            children: vec![child("rack_1"), child("rack_2")],
+            ramp_rate_per_sec: None,
+            hysteresis_margin: None,
+            hysteresis_dwell_secs: None,
+            power_min: None,
+            power_max: None,
+            import_limit_topic: None,
+            export_limit_topic: None,
+            active_power_topic: None,
+        };
+        // Act
+        let mut shares = compute_shares(&binding, 200_000.0, "site_001", &cache).unwrap();
+        shares.sort_by(|a, b| a.0.cmp(&b.0));
+        // Assert
+        assert_eq!(
+            shares,
+            vec![
+                ("rack_1".to_string(), 100_000.0),
+                ("rack_2".to_string(), 100_000.0)
+            ]
+        );
     }
 }

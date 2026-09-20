@@ -93,6 +93,14 @@ impl EnvelopeController {
         }
     }
 
+    /// The gateway's current belief of what the device holds — set by the
+    /// most recent tick that actually changed it, whether or not the last
+    /// call to `tick` itself returned `Some`.
+    #[must_use]
+    pub fn current_output(&self) -> f64 {
+        self.current_output
+    }
+
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
     pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
