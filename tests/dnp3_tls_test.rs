@@ -40,7 +40,8 @@ async fn gateway_polls_dnp3_tls_outstation_and_publishes_to_mqtt() -> Result<()>
     // Arrange — PKI, hivemq, in-process DNP3/TLS outstation, spec stub.
     let subject_name = "relay-01.test.local";
     let pki = gen_test_pki(subject_name)?;
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let outstation = dnp3_security::spawn(&pki).await?;
     let body = build_spec_body(

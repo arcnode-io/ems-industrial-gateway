@@ -53,7 +53,9 @@ async fn gateway_polls_snmpv3_usm_agent_and_publishes_to_mqtt() -> Result<()> {
         std::env::set_var("SNMP_USM_GATEWAY_PRIV_PASSPHRASE", PRIV_PASS);
     }
 
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let agent = start_mock_snmp_agent_v3(SECURITY_NAME, AUTH_PASS, PRIV_PASS).await?;
     let agent_host = agent.get_host().await?;

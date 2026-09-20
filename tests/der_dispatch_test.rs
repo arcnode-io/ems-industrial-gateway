@@ -35,7 +35,8 @@ async fn publishes_site_total_summed_from_distribute_parent_devices() -> Result<
     // Arrange — a distribute-parent device (bess_module_1) marks itself as
     // one via a Distribute-bound set_active_power command; no real racks
     // needed since der_dispatch sums the module's OWN active_power topic.
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let body = json!({
         "info": { "version": "v1" },

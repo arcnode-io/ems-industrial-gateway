@@ -69,7 +69,8 @@ async fn read_rack_watts(port: u16) -> Result<i32> {
 async fn envelope_clamps_autonomously_on_limit_tightening_with_no_command() -> Result<()> {
     init_tracing();
     // Arrange — hivemq + two real writable mock-modbus containers (racks).
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let rack1 = start_mock_modbus_server_writable().await?;
     let rack1_port = rack1.get_host_port_ipv4(502).await?;

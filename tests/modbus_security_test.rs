@@ -49,7 +49,8 @@ async fn gateway_polls_modbus_security_device_and_publishes_to_mqtt() -> Result<
     // Arrange — PKI, hivemq, in-process Modbus Security server, spec stub.
     let subject_name = "meter-01.test.local";
     let pki = gen_test_pki(subject_name)?;
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let modbus = modbus_security::spawn(&pki).await?;
     let body = build_spec_body(

@@ -40,7 +40,8 @@ async fn gateway_polls_redfish_mtls_service_and_publishes_to_mqtt() -> Result<()
     // Arrange — PKI, hivemq, in-process Redfish HTTPS+mTLS service, spec stub.
     let subject_name = "switch-01.test.local";
     let pki = gen_test_pki(subject_name)?;
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let redfish = redfish_security::spawn(&pki).await?;
     let body = build_spec_body(

@@ -48,7 +48,8 @@ const DRIVEN_VALUE: f64 = 2_345_678.0;
 async fn control_driven_register_publishes_exact_engineering_value() -> Result<()> {
     init_tracing();
     // Arrange — hivemq + REAL mock-modbus container + /asyncapi stub.
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let mock = start_mock_modbus_server().await?;
     let modbus_port = mock.get_host_port_ipv4(502).await?;

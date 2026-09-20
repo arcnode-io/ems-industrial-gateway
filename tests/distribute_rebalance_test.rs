@@ -64,7 +64,8 @@ async fn plain_distribute_rebalances_on_soc_drift_with_no_new_command() -> Resul
     // Arrange — hivemq + two real writable mock-modbus racks, a PLAIN
     // (unguarded) soc_weighted distribute binding — no ramp_rate_per_sec/
     // hysteresis fields, so envelope_guard_config would return None.
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let rack1 = start_mock_modbus_server_writable().await?;
     let rack1_port = rack1.get_host_port_ipv4(502).await?;

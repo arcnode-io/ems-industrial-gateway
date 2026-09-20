@@ -44,10 +44,11 @@ const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result<()> {
     init_tracing();
     // Arrange — minimal fixture: MQTT + postgres (device-api dep) + device-api
-    let (pg, hivemq) = tokio::try_join!(start_postgres(), start_hivemq())?;
+    let network = fixtures::containers::unique_network();
+    let (pg, hivemq) = tokio::try_join!(start_postgres(&network), start_hivemq(&network))?;
     let _ = &pg;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
-    let device_api = start_device_api().await?;
+    let device_api = start_device_api(&network).await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
 
     // DTM has bess_module_1 + the synthetic measurement (seed_dtm.json).

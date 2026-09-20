@@ -46,12 +46,13 @@ async fn read_cmd_register(port: u16) -> Result<i32> {
 #[tokio::test]
 async fn real_templates_resolve_and_distribute_soc_weighted_write() -> Result<()> {
     init_tracing();
-    // Arrange — full real stack: postgres + hivemq + device-api on the shared
-    // network, two writable mock-modbus racks reachable from the host.
-    let (pg, hivemq) = tokio::try_join!(start_postgres(), start_hivemq())?;
+    // Arrange — full real stack: postgres + hivemq + device-api on their own
+    // per-test network, two writable mock-modbus racks reachable from the host.
+    let network = fixtures::containers::unique_network();
+    let (pg, hivemq) = tokio::try_join!(start_postgres(&network), start_hivemq(&network))?;
     let _ = &pg;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
-    let device_api = start_device_api().await?;
+    let device_api = start_device_api(&network).await?;
     let device_api_port = device_api.get_host_port_ipv4(3000).await?;
     let rack1 = start_mock_modbus_server_writable().await?;
     let rack1_modbus = rack1.get_host_port_ipv4(502).await?;

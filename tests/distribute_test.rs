@@ -66,7 +66,8 @@ fn child_entry(device_id: &str) -> serde_json::Value {
 async fn distribute_command_writes_equal_split_to_both_racks() -> Result<()> {
     init_tracing();
     // Arrange — hivemq + two real writable mock-modbus containers (racks).
-    let hivemq = start_hivemq().await?;
+    let network = fixtures::containers::unique_network();
+    let hivemq = start_hivemq(&network).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let rack1 = start_mock_modbus_server_writable().await?;
     let rack1_addr: SocketAddr = format!("127.0.0.1:{}", rack1.get_host_port_ipv4(502).await?)

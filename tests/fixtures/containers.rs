@@ -1,10 +1,20 @@
 //! Testcontainer helpers for the gateway e2e test.
 //!
-//! Postgres / hivemq / device-api join a shared Docker network so device-api
+//! Postgres / hivemq / device-api join a per-test Docker network so device-api
 //! resolves `postgres` and `hivemq` hostnames per its `beta:` cfg block.
 //! mock-modbus-server doesn't need the network — the gateway (running on the
 //! host) reaches it via the testcontainer's mapped port.
+//!
+//! Network name AND container name must both be unique per test run: Docker
+//! container names are unique daemon-wide (not just per-network), so two
+//! concurrently-running test binaries both asking for a container literally
+//! named "postgres" collide with a 409 even on separate networks. Each
+//! caller generates one `unique_network()` value and threads it through
+//! every container in that test's own trio; the fixed hostname device-api
+//! actually resolves comes from `.with_hostname(...)`, not the container's
+//! (now-unique) `--name`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -16,26 +26,33 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 /// genuine startup bugs (those usually fail in <10s).
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Shared Docker network name for the e2e stack.
-pub const NETWORK: &str = "gateway-e2e";
+/// A Docker network name unique to this process and call — safe to reuse
+/// across the postgres/hivemq/device-api trio of a single test, and
+/// guaranteed not to collide with any other concurrently-running test
+/// binary (or concurrent test within this one).
+pub fn unique_network() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("gateway-e2e-{}-{n}", std::process::id())
+}
 
-/// Spin up Postgres on the shared network with hostname `postgres`.
-pub async fn start_postgres() -> anyhow::Result<ContainerAsync<GenericImage>> {
+/// Spin up Postgres on `network`, resolvable there as `postgres`.
+pub async fn start_postgres(network: &str) -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("postgres", "15")
         .with_exposed_port(ContainerPort::Tcp(5432))
         .with_wait_for(WaitFor::message_on_stderr(
             "database system is ready to accept connections",
         ))
         .with_env_var("POSTGRES_PASSWORD", "test")
-        .with_network(NETWORK)
-        .with_container_name("postgres")
+        .with_network(network)
+        .with_hostname("postgres")
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
     Ok(c)
 }
 
-/// Spin up hivemq on the shared network with hostname `hivemq`.
+/// Spin up hivemq on `network`, resolvable there as `hivemq`.
 ///
 /// Uses `with_mapped_port(0, ...)` (single OS-assigned host binding)
 /// rather than `with_exposed_port` because the latter triggers
@@ -43,14 +60,14 @@ pub async fn start_postgres() -> anyhow::Result<ContainerAsync<GenericImage>> {
 /// mode publishes EVERY image-EXPOSE port (HiveMQ exposes 1883/8000/
 /// 8083/8443/8883), multiplying collision odds on a busy CI runner
 /// (e.g. Harbor on 8083).
-pub async fn start_hivemq() -> anyhow::Result<ContainerAsync<GenericImage>> {
+pub async fn start_hivemq(network: &str) -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("hivemq/hivemq-ce", "latest")
         .with_wait_for(WaitFor::message_on_stdout(
             "Started TCP Listener on address 0.0.0.0 and on port 1883.",
         ))
         .with_mapped_port(0, ContainerPort::Tcp(1883))
-        .with_network(NETWORK)
-        .with_container_name("hivemq")
+        .with_network(network)
+        .with_hostname("hivemq")
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
@@ -188,8 +205,9 @@ pub async fn start_mock_bacnet_device() -> anyhow::Result<ContainerAsync<Generic
 }
 
 /// Spin up the real device-api with `ENV=beta` so it resolves `postgres` +
-/// `hivemq` via the shared Docker network.
-pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> {
+/// `hivemq` via `network` — must be the same network `start_postgres`/
+/// `start_hivemq` were given for this test.
+pub async fn start_device_api(network: &str) -> anyhow::Result<ContainerAsync<GenericImage>> {
     let c = GenericImage::new("public.ecr.aws/y1d2j6a8/ems-device-api", "latest")
         .with_exposed_port(ContainerPort::Tcp(3000))
         .with_wait_for(WaitFor::message_on_stdout(
@@ -207,7 +225,7 @@ pub async fn start_device_api() -> anyhow::Result<ContainerAsync<GenericImage>> 
         .with_env_var("AUTH_VIEWER_PW", "test-viewer-pw")
         .with_env_var("MQTT_OPERATOR_PASSWORD", "test-operator-pw")
         .with_env_var("MQTT_VIEWER_PASSWORD", "test-viewer-pw")
-        .with_network(NETWORK)
+        .with_network(network)
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
