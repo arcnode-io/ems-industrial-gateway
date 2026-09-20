@@ -15,6 +15,7 @@ use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
 use crate::bacnet::client as bacnet;
 use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::{Config, GatewayCredentials};
+use crate::der_dispatch;
 use crate::dispatch;
 use crate::dnp3::client as dnp3;
 use crate::envelope;
@@ -84,6 +85,10 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // gateway restart (logged + tracked in handoff).
     let mut input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
     input_topics.extend(collect_distribute_input_topics(&initial_spec, &cfg.site_id));
+    input_topics.extend(collect_der_dispatch_active_power_topics(
+        &initial_spec,
+        &cfg.site_id,
+    ));
     let cache = synthetic::new_input_cache();
     // Device/channel bindings backing dispatch — refreshed on every
     // successful spec re-fetch so accepts/rejects/writes track live topology.
@@ -311,6 +316,25 @@ fn spawn_task_set(
         }
     }
 
+    let der_dispatch_source_topics = collect_der_dispatch_active_power_topics(spec, &cfg.site_id);
+    let der_dispatch_cfg = der_dispatch::DerDispatchTaskConfig {
+        output_topic: format!(
+            "sites/{}/devices/der_dispatch/measurements/actual_active_power/watts",
+            cfg.site_id
+        ),
+        source_topics: der_dispatch_source_topics,
+        tick_hz: DEFAULT_POLL_HZ,
+    };
+    let der_dispatch_handle = der_dispatch::spawn(
+        der_dispatch_cfg,
+        cache.clone(),
+        client.clone(),
+        parent.child_token(),
+    );
+    handles.spawn(async move {
+        let _ = der_dispatch_handle.await;
+    });
+
     info!(
         spawned_poll,
         spawned_synthetic, spawned_envelope, "task set built"
@@ -404,6 +428,27 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                     topics.insert(substitute_site_id(&guard.active_power_topic, site_id));
                 }
             }
+        }
+    }
+    topics.into_iter().collect()
+}
+
+/// Every distribute-parent device's own `active_power` topic (with
+/// `{site_id}` substituted) — today, every `bess_module` instance. Feeds
+/// `der_dispatch::actual_active_power`'s site-total sum. A device qualifies
+/// by having at least one `Distribute`-bound command, not by template name —
+/// stays correct if site→module distribution later adds a second tier.
+fn collect_der_dispatch_active_power_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
+    let mut topics: BTreeSet<String> = BTreeSet::new();
+    for (device_id, commands) in &spec.x_command_source {
+        let is_distribute_parent = commands
+            .values()
+            .any(|source| matches!(source.binding, ProtocolBinding::Distribute(_)));
+        if is_distribute_parent {
+            topics.insert(substitute_site_id(
+                &format!("sites/{{site_id}}/devices/{device_id}/measurements/active_power/watts"),
+                site_id,
+            ));
         }
     }
     topics.into_iter().collect()
