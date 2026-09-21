@@ -38,10 +38,31 @@ const STREAM_CAPACITY: usize = 1024;
 /// FloatSample wire shape — `{ts, value}` per ADR-002 §5. Only `value` is
 /// pulled into the cache today; `ts` is ignored (cache stamps Instant::now()
 /// for local-monotonic ordering, separate from the publisher's wall-clock ts).
+///
+/// `value` also accepts a JSON boolean (coerced true/false -> 1.0/0.0) — the
+/// cache is numeric-only, but BooleanSample measurements (der_dispatch's
+/// event_active etc.) publish a literal JSON bool on the wire, not a number.
 #[derive(Debug, Deserialize)]
 struct FloatSample {
-    /// The numeric reading parsed from the JSON payload.
+    /// The numeric (or boolean, coerced) reading parsed from the JSON payload.
+    #[serde(deserialize_with = "value_as_f64")]
     value: f64,
+}
+
+/// Deserialize `value` as f64, coercing a JSON boolean to 1.0/0.0.
+fn value_as_f64<'de, D>(deserializer: D) -> std::result::Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| serde::de::Error::custom("value is not a valid f64")),
+        serde_json::Value::Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
+        other => Err(serde::de::Error::custom(format!(
+            "value must be a number or boolean, got {other}"
+        ))),
+    }
 }
 
 /// Subscribe to `system/topology_changed` AND the given measurement topics in
@@ -169,5 +190,17 @@ mod tests {
         cache_float_sample(&cache, "topic", br#"{"ts":"now"}"#);
         // Assert — neither call inserted
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn cache_float_sample_coerces_boolean_value_to_one_or_zero() {
+        // Arrange — BooleanSample wire shape (der_dispatch.event_active etc.):
+        // `{ts, value: true|false}`, a JSON bool, not a number.
+        let cache = new_input_cache();
+        cache_float_sample(&cache, "t", br#"{"ts":"now","value":true}"#);
+        cache_float_sample(&cache, "f", br#"{"ts":"now","value":false}"#);
+        // Assert
+        assert_eq!(cache.get("t").unwrap().0, 1.0);
+        assert_eq!(cache.get("f").unwrap().0, 0.0);
     }
 }

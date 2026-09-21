@@ -89,6 +89,22 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         &initial_spec,
         &cfg.site_id,
     ));
+    input_topics.extend(collect_der_dispatch_state_of_charge_topics(
+        &initial_spec,
+        &cfg.site_id,
+    ));
+    // der_dispatch's own target-side channels (published by ems-der-control-
+    // api) — the site-distribution task's reactive trigger. Not templated
+    // (der_dispatch isn't in every spec), so subscribed unconditionally;
+    // holds forever on a site with no der_dispatch, same as its other inputs.
+    input_topics.push(format!(
+        "sites/{}/devices/der_dispatch/measurements/target_active_power/watts",
+        cfg.site_id
+    ));
+    input_topics.push(format!(
+        "sites/{}/devices/der_dispatch/measurements/event_active/none",
+        cfg.site_id
+    ));
     let cache = synthetic::new_input_cache();
     // Device/channel bindings backing dispatch — refreshed on every
     // successful spec re-fetch so accepts/rejects/writes track live topology.
@@ -335,6 +351,29 @@ fn spawn_task_set(
         let _ = der_dispatch_handle.await;
     });
 
+    let site_distribution_cfg = der_dispatch::SiteDistributionConfig {
+        site_id: cfg.site_id.clone(),
+        target_topic: format!(
+            "sites/{}/devices/der_dispatch/measurements/target_active_power/watts",
+            cfg.site_id
+        ),
+        event_active_topic: format!(
+            "sites/{}/devices/der_dispatch/measurements/event_active/none",
+            cfg.site_id
+        ),
+        tick_hz: DEFAULT_POLL_HZ,
+    };
+    let site_distribution_handle = der_dispatch::spawn_site_distribution(
+        site_distribution_cfg,
+        cache.clone(),
+        client.clone(),
+        device_channels.clone(),
+        parent.child_token(),
+    );
+    handles.spawn(async move {
+        let _ = site_distribution_handle.await;
+    });
+
     info!(
         spawned_poll,
         spawned_synthetic, spawned_envelope, "task set built"
@@ -433,25 +472,55 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
     topics.into_iter().collect()
 }
 
-/// Every distribute-parent device's own `active_power` topic (with
-/// `{site_id}` substituted) — today, every `bess_module` instance. Feeds
-/// `der_dispatch::actual_active_power`'s site-total sum. A device qualifies
-/// by having at least one `Distribute`-bound command, not by template name —
-/// stays correct if site→module distribution later adds a second tier.
+/// Every distribute-parent device_id — today, every `bess_module` instance.
+/// A device qualifies by having at least one `Distribute`-bound command, not
+/// by template name — stays correct at any module count and at any
+/// distribution tier (module→rack today, site→module built on the same
+/// detection).
+fn distribute_parent_device_ids(spec: &AsyncApiSpec) -> Vec<String> {
+    spec.x_command_source
+        .iter()
+        .filter(|(_, commands)| {
+            commands
+                .values()
+                .any(|source| matches!(source.binding, ProtocolBinding::Distribute(_)))
+        })
+        .map(|(device_id, _)| device_id.clone())
+        .collect()
+}
+
+/// Each distribute-parent's own `active_power` topic (with `{site_id}`
+/// substituted) — feeds `der_dispatch::actual_active_power`'s site-total
+/// sum. Deliberately does NOT include state_of_charge: that's a different
+/// task's (`site_distribution`) concern, and mixing it into this list would
+/// make the sum wait on an unrelated measurement that may never publish.
 fn collect_der_dispatch_active_power_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
-    let mut topics: BTreeSet<String> = BTreeSet::new();
-    for (device_id, commands) in &spec.x_command_source {
-        let is_distribute_parent = commands
-            .values()
-            .any(|source| matches!(source.binding, ProtocolBinding::Distribute(_)));
-        if is_distribute_parent {
-            topics.insert(substitute_site_id(
+    distribute_parent_device_ids(spec)
+        .iter()
+        .map(|device_id| {
+            substitute_site_id(
                 &format!("sites/{{site_id}}/devices/{device_id}/measurements/active_power/watts"),
                 site_id,
-            ));
-        }
-    }
-    topics.into_iter().collect()
+            )
+        })
+        .collect()
+}
+
+/// Each distribute-parent's own `state_of_charge` topic (with `{site_id}`
+/// substituted) — not summed by anything, just needs to be subscribed so
+/// `site_distribution`'s SoC-weighted split has it cached.
+fn collect_der_dispatch_state_of_charge_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
+    distribute_parent_device_ids(spec)
+        .iter()
+        .map(|device_id| {
+            substitute_site_id(
+                &format!(
+                    "sites/{{site_id}}/devices/{device_id}/measurements/state_of_charge/percent"
+                ),
+                site_id,
+            )
+        })
+        .collect()
 }
 
 /// Substitute `{site_id}` in an input topic template. `{device_id}` is

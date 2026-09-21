@@ -90,5 +90,5 @@ fn sum_cached(topics: &[String], cache: &InputCache) -> Option<f64> {
 }
 
 #[cfg(test)]
-#[path = "der_dispatch_test.rs"]
+#[path = "actual_power_test.rs"]
 mod tests;
