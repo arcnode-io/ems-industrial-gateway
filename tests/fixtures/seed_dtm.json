@@ -8,7 +8,7 @@
   "devices": {
     "meter_01": {
       "device_id": "meter_01",
-      "template": "revenue_meter",
+      "template": "poi_meter",
       "parent": null,
       "connection": {
         "host": "<replaced-at-test-time>",
@@ -71,13 +71,13 @@
   },
   "buses": [],
   "templates_used": {
-    "revenue_meter": {
-      "template": "revenue_meter",
+    "poi_meter": {
+      "template": "poi_meter",
       "kind": "leaf",
       "equipment_id": "GRD-MTR-001",
       "vendor": "Schneider Electric",
       "model": "PowerLogic ION9000",
-      "description": "Class 0.1S revenue meter (ANSI C12.20 / IEC 62053-22)",
+      "description": "Class 0.1S revenue-grade POI meter (ANSI C12.20 / IEC 62053-22)",
       "measurements": {
         "kwh_delivered": {
           "unit": "watt_hours",

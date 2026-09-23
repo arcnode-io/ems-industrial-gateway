@@ -275,7 +275,7 @@ Pulls `173.211.12.43:8083/library/{ems-device-api,mock-modbus-server,mock-snmp-a
 
 ## What the integration test proves
 
-- `device-api` POST /topology accepts a multi-device DTM (revenue meter, PDU, network switch, protective relay, dry cooler) and persists it.
+- `device-api` POST /topology accepts a multi-device DTM (POI meter, PDU, network switch, protective relay, dry cooler) and persists it.
 - `device-api` regenerates `/asyncapi` with `x-protocol-source` populated for every measurement (binding + connection + unit + poll_rate_hz).
 - Gateway fetches and validates the spec end-to-end, walks `x-protocol-source`, and spawns one tokio task per channel.
 - Each protocol client reads its fixture (Modbus, SNMP, Redfish, DNP3, BACnet/IP) and publishes a `FloatSample` to the canonical MQTT topic at the rate the spec declares.
