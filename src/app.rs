@@ -676,6 +676,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
         ProtocolBinding::Distribute(d) => ProtocolBinding::Distribute(DistributeBinding {
             allocation_policy: d.allocation_policy.clone(),
             children: d.children.clone(),
+            state_of_charge_floor_percent: d.state_of_charge_floor_percent,
             ramp_rate_per_sec: d.ramp_rate_per_sec,
             hysteresis_margin: d.hysteresis_margin,
             hysteresis_dwell_secs: d.hysteresis_dwell_secs,

@@ -45,6 +45,7 @@ pub fn compute_shares(
         .children
         .iter()
         .map(|c| resolve_child(c, target, site_id, cache))
+        .map(|child| child.map(|c| apply_reserve_floor(binding, c, target)))
         .collect::<Result<_>>()?;
     let shares = allocation::allocate(target, &children, policy);
     if shares.is_empty() {
@@ -119,6 +120,29 @@ fn resolve_child(
     })
 }
 
+/// Zero a child's discharge headroom once its SoC is at or below the
+/// binding's reserve floor, so allocation hands its share to children still
+/// above it. Charging is never restricted.
+///
+/// Reason: enforced per child, so every child keeps floor% of its own
+/// capacity and the site total can never dip below the site-wide reserve.
+/// Residual overshoot: a child crossing the floor mid-command keeps
+/// discharging until the next 1 Hz rebalance tick recomputes shares, plus
+/// however stale the BMS's SoC reading is (~1 s × that child's power).
+fn apply_reserve_floor(
+    binding: &DistributeBinding,
+    child: ChildCapacity,
+    target: f64,
+) -> ChildCapacity {
+    match binding.state_of_charge_floor_percent {
+        Some(floor) if target > 0.0 && child.state_of_charge <= floor => ChildCapacity {
+            headroom: 0.0,
+            ..child
+        },
+        _ => child,
+    }
+}
+
 /// Map a cached `operating_state` reading back to its enum. Register-value
 /// convention per `bess_rack.yaml`: 0=STANDBY, 1=CHARGING, 2=DISCHARGING,
 /// 3=FAULT, 4=OFFLINE.
@@ -135,106 +159,5 @@ fn operating_state_from_f64(raw: f64) -> Result<OperatingState> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::asyncapi::types::ChildAllocation;
-    use crate::synthetic::new_input_cache;
-    use std::time::Instant;
-
-    #[test]
-    fn resolve_child_substitutes_site_id_before_cache_lookup() {
-        // Arrange — cache keyed by the RESOLVED topic (site_id substituted),
-        // matching what app.rs's subscription list actually caches under.
-        let cache = new_input_cache();
-        cache.insert(
-            "sites/site_001/devices/rack_1/measurements/operating_state/none".into(),
-            (0.0, Instant::now()),
-        );
-        cache.insert(
-            "sites/site_001/devices/rack_1/measurements/state_of_charge/percent".into(),
-            (65.0, Instant::now()),
-        );
-        let child = ChildAllocation {
-            device_id: "rack_1".to_string(),
-            operating_state_topic:
-                "sites/{site_id}/devices/rack_1/measurements/operating_state/none".to_string(),
-            state_of_charge_topic:
-                "sites/{site_id}/devices/rack_1/measurements/state_of_charge/percent".to_string(),
-            power_min: -4_000_000.0,
-            power_max: 4_000_000.0,
-        };
-        // Act
-        let resolved = resolve_child(&child, 100.0, "site_001", &cache).unwrap();
-        // Assert
-        assert_eq!(resolved.operating_state, OperatingState::Standby);
-        assert!((resolved.state_of_charge - 65.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn operating_state_from_f64_maps_all_five_values() {
-        for (raw, expected) in [
-            (0.0, OperatingState::Standby),
-            (1.0, OperatingState::Charging),
-            (2.0, OperatingState::Discharging),
-            (3.0, OperatingState::Fault),
-            (4.0, OperatingState::Offline),
-        ] {
-            assert_eq!(operating_state_from_f64(raw).unwrap(), expected);
-        }
-    }
-
-    #[test]
-    fn operating_state_from_f64_rejects_out_of_range() {
-        assert!(operating_state_from_f64(5.0).is_err());
-    }
-
-    #[test]
-    fn compute_shares_splits_equally_across_two_standby_children() {
-        // Arrange — two racks, equal SoC, equal_split policy.
-        let cache = new_input_cache();
-        for rack in ["rack_1", "rack_2"] {
-            cache.insert(
-                format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
-                (0.0, Instant::now()),
-            );
-            cache.insert(
-                format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
-                (50.0, Instant::now()),
-            );
-        }
-        let child = |id: &str| ChildAllocation {
-            device_id: id.to_string(),
-            operating_state_topic: format!(
-                "sites/{{site_id}}/devices/{id}/measurements/operating_state/none"
-            ),
-            state_of_charge_topic: format!(
-                "sites/{{site_id}}/devices/{id}/measurements/state_of_charge/percent"
-            ),
-            power_min: -4_000_000.0,
-            power_max: 4_000_000.0,
-        };
-        let binding = DistributeBinding {
-            allocation_policy: "equal_split".to_string(),
-            children: vec![child("rack_1"), child("rack_2")],
-            ramp_rate_per_sec: None,
-            hysteresis_margin: None,
-            hysteresis_dwell_secs: None,
-            power_min: None,
-            power_max: None,
-            import_limit_topic: None,
-            export_limit_topic: None,
-            active_power_topic: None,
-        };
-        // Act
-        let mut shares = compute_shares(&binding, 200_000.0, "site_001", &cache).unwrap();
-        shares.sort_by(|a, b| a.0.cmp(&b.0));
-        // Assert
-        assert_eq!(
-            shares,
-            vec![
-                ("rack_1".to_string(), 100_000.0),
-                ("rack_2".to_string(), 100_000.0)
-            ]
-        );
-    }
-}
+#[path = "distribute_test.rs"]
+mod tests;

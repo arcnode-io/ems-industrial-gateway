@@ -15,6 +15,7 @@ fn distribute_binding(power_min: f64, power_max: f64) -> ProtocolBinding {
     ProtocolBinding::Distribute(DistributeBinding {
         allocation_policy: "soc_weighted".to_string(),
         children: vec![],
+        state_of_charge_floor_percent: None,
         ramp_rate_per_sec: None,
         hysteresis_margin: None,
         hysteresis_dwell_secs: None,

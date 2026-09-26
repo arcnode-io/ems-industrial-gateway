@@ -147,17 +147,24 @@ pub struct WeightedPair {
 /// setpoint across N children (e.g. `bess_rack` instances) via a max-min
 /// fair allocation policy. See `dispatch::allocation`.
 ///
-/// The eight fields below `children` are envelope-guard config — all
-/// present together, or all absent, per `envelope::envelope_guard_config`.
-/// A plain distribute binding (no envelope guard) has none of them; nothing
-/// about a device's own `set_active_power` command changes shape depending
-/// on whether it's envelope-guarded.
+/// The eight fields from `ramp_rate_per_sec` to `active_power_topic` are
+/// envelope-guard config — all present together, or all absent, per
+/// `envelope::envelope_guard_config`. A plain distribute binding (no
+/// envelope guard) has none of them; nothing about a device's own
+/// `set_active_power` command changes shape depending on whether it's
+/// envelope-guarded.
 #[derive(Debug, Deserialize)]
 pub struct DistributeBinding {
     /// Allocation policy name: `equal_split` or `soc_weighted`.
     pub allocation_policy: String,
     /// Fully-resolved children to distribute the setpoint across.
     pub children: Vec<ChildAllocation>,
+    /// Reserve floor, percent of each child's own state_of_charge (0-100).
+    /// A child at or below it gets no discharge share; charging is never
+    /// restricted. Resolved by ems-device-api from the DTM's
+    /// `bess_reserve_floor_mwh` over site-wide rack capacity; absent = no floor.
+    #[serde(default)]
+    pub state_of_charge_floor_percent: Option<f64>,
     /// Ramp rate on recovery, as a fraction of rated power per second.
     #[serde(default)]
     pub ramp_rate_per_sec: Option<f64>,
