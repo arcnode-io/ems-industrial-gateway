@@ -113,7 +113,8 @@ async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks()
         let cancel = cancel.clone();
         tokio::spawn(async move { app::run(cfg, cancel).await })
     };
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_1, MODULE_2])
+        .await?;
 
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()

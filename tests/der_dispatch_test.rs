@@ -71,7 +71,7 @@ async fn publishes_site_total_summed_from_distribute_parent_devices() -> Result<
         let cancel = cancel.clone();
         tokio::spawn(async move { app::run(cfg, cancel).await })
     };
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_ID]).await?;
 
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()

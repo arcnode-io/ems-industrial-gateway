@@ -118,7 +118,7 @@ async fn distribute_command_writes_equal_split_to_both_racks() -> Result<()> {
 
     // Give the gateway a moment to fetch the spec + establish subscriptions
     // before the operator publishes anything.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_ID]).await?;
 
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()

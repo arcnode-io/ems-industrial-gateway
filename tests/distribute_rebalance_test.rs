@@ -109,7 +109,7 @@ async fn plain_distribute_rebalances_on_soc_drift_with_no_new_command() -> Resul
         let cancel = cancel.clone();
         tokio::spawn(async move { app::run(cfg, cancel).await })
     };
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_ID]).await?;
 
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()
