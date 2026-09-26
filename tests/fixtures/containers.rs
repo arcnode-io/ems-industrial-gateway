@@ -229,5 +229,25 @@ pub async fn start_device_api(network: &str) -> anyhow::Result<ContainerAsync<Ge
         .with_startup_timeout(STARTUP_TIMEOUT)
         .start()
         .await?;
+    wait_until_http_bound(c.get_host_port_ipv4(3000).await?).await?;
     Ok(c)
+}
+
+/// Poll until device-api answers HTTP at all.
+///
+/// Reason: NestJS logs "Nest application successfully started" at the end
+/// of `init()`, before `listen()` binds the port. A request in that gap hits
+/// Docker's port proxy, which accepts then resets the connection. Any
+/// response, even a 404, proves the port is bound.
+async fn wait_until_http_bound(port: u16) -> anyhow::Result<()> {
+    let url = format!("http://localhost:{port}/asyncapi");
+    let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
+    while reqwest::get(&url).await.is_err() {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "device-api never bound its HTTP port"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Ok(())
 }
