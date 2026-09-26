@@ -33,15 +33,11 @@ const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Synthetic-channel e2e (Phase 4 part A): no south-side device, just MQTT +
 /// device-api + gateway. Test publishes the synthetic inputs to MQTT, gateway
-/// caches + computes `import_limit − active_power`, publishes the result on
-/// the canonical `bess_module_1.import_headroom` topic.
-///
-/// Will fail until the registry's `ems-device-api:latest` image picks up the
-/// Phase 1 schema additions (Publisher.GATEWAY, SyntheticBinding, the
-/// AsyncAPI `{device_id}` substitution). Auto-passes on the next CI cycle
-/// after edp-api/ems-device-api commits land.
+/// caches + computes `import_limit + active_power` (+ discharge convention:
+/// discharging grows import headroom), publishes the result on the canonical
+/// `bess_module_1.import_headroom` topic.
 #[tokio::test]
-async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result<()> {
+async fn synthetic_headroom_publishes_sum_of_cached_mqtt_inputs() -> Result<()> {
     init_tracing();
     // Arrange — minimal fixture: MQTT + postgres (device-api dep) + device-api
     let network = fixtures::containers::unique_network();
@@ -153,10 +149,10 @@ async fn synthetic_headroom_publishes_subtract_of_cached_mqtt_inputs() -> Result
     gateway_handle.await??;
     pub_client.disconnect(None).await?;
 
-    // 5_000_000 − 2_000_000 = 3_000_000 (loose epsilon for any float drift)
+    // 5_000_000 + 2_000_000 = 7_000_000 (loose epsilon for any float drift)
     assert!(
-        (value - 3_000_000.0).abs() < 1.0,
-        "synthetic headroom should be 3_000_000, got {value}",
+        (value - 7_000_000.0).abs() < 1.0,
+        "synthetic headroom should be 7_000_000, got {value}",
     );
 
     Ok(())
