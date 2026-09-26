@@ -1,9 +1,9 @@
 //! e2e: BESS envelope actuation. Proves the one genuinely new behavior —
 //! the gateway writes to real Modbus devices with NO inbound command
-//! message involved, purely because cached `import_limit`/`active_power`
-//! changed. Ramp/hysteresis timing math is already exhaustively covered by
-//! `envelope::control_law_test`'s 10 pure unit tests; this test exists to
-//! prove the autonomous trigger + real write wiring, not re-prove the math.
+//! message involved, purely because cached `export_limit`/`active_power`
+//! changed. Ramp/hysteresis timing math is already covered by
+//! `envelope::control_law_test`; this test exists to prove the autonomous
+//! trigger + real write wiring, not re-prove the math.
 
 mod fixtures;
 
@@ -124,7 +124,7 @@ async fn envelope_clamps_autonomously_on_limit_tightening_with_no_command() -> R
         let cancel = cancel.clone();
         tokio::spawn(async move { app::run(cfg, cancel).await })
     };
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_ID]).await?;
 
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()
@@ -206,12 +206,12 @@ async fn envelope_clamps_autonomously_on_limit_tightening_with_no_command() -> R
     assert_eq!(read_rack_watts(rack1_port).await?, 100_000);
     assert_eq!(read_rack_watts(rack2_port).await?, 100_000);
 
-    // Act — NO new command. Tighten import_limit below the module's real
-    // active_power reading, simulating der_control_api pushing a new
+    // Act — NO new command. Tighten export_limit below the module's real
+    // discharge (+active_power), simulating der_control_api pushing a new
     // envelope. This alone must trigger a write.
     operator
         .publish(Message::new(
-            format!("sites/{SITE_ID}/devices/operating_envelope/measurements/import_limit/watts"),
+            format!("sites/{SITE_ID}/devices/operating_envelope/measurements/export_limit/watts"),
             r#"{"ts":"t","value":50000.0}"#,
             0,
         ))

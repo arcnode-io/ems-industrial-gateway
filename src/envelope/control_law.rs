@@ -10,6 +10,14 @@
 //! clamped to the limit; on sustained recovery, output ramps back toward
 //! `requested_setpoint`, never toward some other value the operator never
 //! asked for.
+//!
+//! Sign convention: positive active_power = discharge (export), negative =
+//! charge (import) — battery-referenced, same as bess_rack's active_power and
+//! the rest of the dispatch path. So export_limit caps discharge (ceiling)
+//! and import_limit caps charge (floor = -import_limit).
+//!
+//! Limits are compared against the module's own active_power, i.e. the BESS
+//! is treated as the only asset at the POI; site load isn't counted.
 
 use std::time::Duration;
 
@@ -60,20 +68,21 @@ pub struct EnvelopeController {
 /// One tick's live inputs.
 #[derive(Debug, Clone, Copy)]
 pub struct EnvelopeTick {
-    /// Live `import_limit`, if the upstream signal has published one yet.
+    /// Live `import_limit` (a positive magnitude) — caps charging. `None`
+    /// until the upstream signal has published one.
     pub import_limit: Option<f64>,
-    /// Live `export_limit` (a positive magnitude), if published.
+    /// Live `export_limit` (a positive magnitude) — caps discharging.
     pub export_limit: Option<f64>,
     /// The module's real, current `active_power` reading.
     pub active_power: f64,
     /// The last real operator/dispatcher setpoint request — the ramp target.
     pub requested_setpoint: f64,
-    /// Module's own static nameplate lower bound (e.g. max charge; negative).
-    /// Ramp rate and hysteresis margin on the export side are fractions of
-    /// its magnitude.
+    /// Module's own static nameplate lower bound (max charge; negative).
+    /// Ramp rate and hysteresis margin on the charge/import side are
+    /// fractions of its magnitude.
     pub power_min: f64,
-    /// Module's own static nameplate upper bound (e.g. max discharge;
-    /// positive). Ramp rate and hysteresis margin on the import side are
+    /// Module's own static nameplate upper bound (max discharge; positive).
+    /// Ramp rate and hysteresis margin on the discharge/export side are
     /// fractions of this.
     pub power_max: f64,
     /// Time since the previous tick.
@@ -104,12 +113,12 @@ impl EnvelopeController {
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
     pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
-        let ceiling = input.import_limit.unwrap_or(f64::INFINITY);
-        let floor = input.export_limit.map(|e| -e).unwrap_or(f64::NEG_INFINITY);
-        let headroom_import = ceiling - input.active_power;
-        let headroom_export = input.active_power - floor;
+        let ceiling = input.export_limit.unwrap_or(f64::INFINITY);
+        let floor = input.import_limit.map(|i| -i).unwrap_or(f64::NEG_INFINITY);
+        let headroom_export = ceiling - input.active_power;
+        let headroom_import = input.active_power - floor;
 
-        if headroom_import <= 0.0 || headroom_export <= 0.0 {
+        if headroom_export <= 0.0 || headroom_import <= 0.0 {
             // Tightening, or a fresh violation — instant clamp, no ramp,
             // regardless of prior mode. A brief undershoot is safe; an
             // overshoot past the limit is the failure mode this exists to
@@ -121,9 +130,9 @@ impl EnvelopeController {
         }
 
         if self.mode == Mode::Constrained {
-            let margin_import = self.config.hysteresis_margin * input.power_max;
-            let margin_export = self.config.hysteresis_margin * input.power_min.abs();
-            if headroom_import >= margin_import && headroom_export >= margin_export {
+            let margin_export = self.config.hysteresis_margin * input.power_max;
+            let margin_import = self.config.hysteresis_margin * input.power_min.abs();
+            if headroom_export >= margin_export && headroom_import >= margin_import {
                 self.dwell_elapsed += input.dt;
                 if self.dwell_elapsed >= self.config.hysteresis_dwell {
                     self.mode = Mode::Ramping;
@@ -148,7 +157,7 @@ impl EnvelopeController {
                 let target = input.requested_setpoint.clamp(floor, ceiling);
                 let delta = target - self.current_output;
                 // Rated power is direction-dependent: ramping toward
-                // import (positive) draws on power_max, toward export
+                // discharge (positive) draws on power_max, toward charge
                 // (negative) on power_min's magnitude.
                 let rated = if delta >= 0.0 {
                     input.power_max

@@ -1,4 +1,6 @@
 //! Unit tests for the envelope control law — ramp rate, hysteresis, clamp.
+//! Sign convention under test: positive active_power = discharge (export),
+//! negative = charge (import).
 
 use super::control_law::{EnvelopeConfig, EnvelopeController, EnvelopeTick};
 use std::time::Duration;
@@ -40,87 +42,90 @@ fn current_output_reflects_last_committed_value_even_when_tick_returns_none() {
     let mut ctrl = EnvelopeController::new(config(), 0.0);
     let changed = ctrl.tick(tick(Some(10_000_000.0), Some(10_000_000.0), 0.0, 500_000.0));
     assert_eq!(changed, Some(500_000.0));
-    assert_eq!(ctrl.current_output(), 500_000.0);
 
     // Act — identical inputs: tick() reports no change...
     let unchanged = ctrl.tick(tick(Some(10_000_000.0), Some(10_000_000.0), 0.0, 500_000.0));
-    // Assert — ...but current_output still reflects the real committed value,
-    // which a rebalance caller needs even on a tick where nothing changed.
+
+    // Assert — ...but current_output still reflects the real committed value.
     assert_eq!(unchanged, None);
     assert_eq!(ctrl.current_output(), 500_000.0);
 }
 
 #[test]
 fn normal_mode_tracks_requested_setpoint_when_unconstrained() {
-    // Arrange — generous limits, well within bounds
     let mut ctrl = EnvelopeController::new(config(), 0.0);
-    // Act
     let out = ctrl.tick(tick(
         Some(3_000_000.0),
         Some(3_000_000.0),
         500_000.0,
         1_000_000.0,
     ));
-    // Assert
     assert_eq!(out, Some(1_000_000.0));
 }
 
 #[test]
 fn no_limits_at_all_never_constrains() {
-    // Arrange — neither limit published yet (upstream fix not landed)
     let mut ctrl = EnvelopeController::new(config(), 0.0);
-    // Act
     let out = ctrl.tick(tick(None, None, 3_900_000.0, 3_999_999.0));
-    // Assert — nothing to clamp against, request passes through
     assert_eq!(out, Some(3_999_999.0));
 }
 
 #[test]
-fn violated_import_ceiling_clamps_immediately_no_dwell() {
+fn import_limit_does_not_cap_discharge() {
+    // Arrange — discharging 100kW against a tight 50kW import limit. Discharge
+    // reduces site import, so the import limit has nothing to say about it.
+    let mut ctrl = EnvelopeController::new(config(), 100_000.0);
+    // Act
+    let out = ctrl.tick(tick(Some(50_000.0), None, 100_000.0, 200_000.0));
+    // Assert — request passes through unclamped
+    assert_eq!(out, Some(200_000.0));
+}
+
+#[test]
+fn export_limit_caps_discharge_immediately_no_dwell() {
     // Arrange — gateway believes the device is still below the ceiling
     let mut ctrl = EnvelopeController::new(config(), 500_000.0);
-    // Act — import_limit=1_000_000, active_power=1_000_000 -> headroom=0, request exceeds it
-    let out = ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_500_000.0));
-    // Assert — clamped to the ceiling immediately, no dwell required
+    // Act — export_limit=1MW, discharging 1MW -> headroom 0, request exceeds it
+    let out = ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_500_000.0));
+    // Assert — clamped to the export limit immediately
     assert_eq!(out, Some(1_000_000.0));
 }
 
 #[test]
-fn violated_export_floor_clamps_immediately() {
-    // Arrange — gateway believes the device is still above the (negative) floor
+fn import_limit_caps_charge_immediately() {
+    // Arrange
     let mut ctrl = EnvelopeController::new(config(), -500_000.0);
-    // Act — export_limit=1_000_000 -> floor=-1_000_000, requesting further export
-    let out = ctrl.tick(tick(None, Some(1_000_000.0), -1_000_000.0, -1_500_000.0));
+    // Act — import_limit=1MW -> floor=-1MW, charging 1MW, requesting more
+    let out = ctrl.tick(tick(Some(1_000_000.0), None, -1_000_000.0, -1_500_000.0));
     // Assert
     assert_eq!(out, Some(-1_000_000.0));
 }
 
 #[test]
 fn constrained_holds_output_until_dwell_satisfied() {
-    // Arrange — enter constrained
+    // Arrange — enter constrained against the export limit
     let mut ctrl = EnvelopeController::new(config(), 1_000_000.0);
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_500_000.0));
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_500_000.0));
     // Act — limit relaxes with generous margin, but only 10s of the 30s dwell
     let mut last = None;
     for _ in 0..10 {
-        last = ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_500_000.0));
+        last = ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_500_000.0));
     }
-    // Assert — still holding, no write (dwell not yet satisfied)
+    // Assert — still holding, no write
     assert_eq!(last, None);
 }
 
 #[test]
 fn constrained_ramps_only_after_dwell_satisfied() {
-    // Arrange — enter constrained at ceiling=1_000_000
+    // Arrange — enter constrained at export ceiling=1MW
     let mut ctrl = EnvelopeController::new(config(), 1_000_000.0);
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_500_000.0));
-    // Act — limit relaxes to 2_000_000 (headroom = 1_000_000, well above the
-    // 5% * 4MW = 200_000 margin); hold for exactly 30 ticks to satisfy dwell
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_500_000.0));
+    // Act — limit relaxes to 2MW (headroom 1MW > 5% * 4MW margin); 30 ticks
     let mut out = None;
     for _ in 0..30 {
-        out = ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_500_000.0));
+        out = ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_500_000.0));
     }
-    // Assert — the 30th tick starts ramping: max_step = 0.10 * 4_000_000 * 1s = 400_000
+    // Assert — 30th tick starts ramping: max_step = 0.10 * 4MW * 1s = 400kW
     assert_eq!(out, Some(1_000_000.0 + 400_000.0));
 }
 
@@ -128,39 +133,33 @@ fn constrained_ramps_only_after_dwell_satisfied() {
 fn dwell_resets_if_margin_lost_before_satisfied() {
     // Arrange — enter constrained
     let mut ctrl = EnvelopeController::new(config(), 1_000_000.0);
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_500_000.0));
-    // Act — 20 good ticks (within margin), then one tick back at the ceiling
-    // (headroom back to 0, a fresh violation resets dwell), then 20 more
-    // good ticks — should NOT have accumulated 30s yet.
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_500_000.0));
+    // Act — 20 good ticks, one fresh violation (resets dwell), 20 more
     for _ in 0..20 {
-        ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_500_000.0));
+        ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_500_000.0));
     }
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_500_000.0));
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_500_000.0));
     let mut out = None;
     for _ in 0..20 {
-        out = ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_500_000.0));
+        out = ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_500_000.0));
     }
-    // Assert — only 20 consecutive good ticks since the reset, dwell not satisfied
+    // Assert — only 20 consecutive good ticks since the reset
     assert_eq!(out, None);
 }
 
 #[test]
 fn ramping_steps_at_configured_rate_then_settles_at_target() {
-    // Arrange — enter constrained, hold 29 of the 30s dwell.
+    // Arrange — enter constrained, hold 29 of the 30s dwell
     let mut ctrl = EnvelopeController::new(config(), 1_000_000.0);
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 1_200_000.0));
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 1_200_000.0));
     for _ in 0..29 {
-        ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_200_000.0));
+        ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_200_000.0));
     }
-    // Act — the 30th tick closes the dwell AND starts ramping in the same
-    // call; target (1_200_000) is only 200_000 away, less than the 400_000
-    // max step, so it settles exactly on target immediately.
-    let out = ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_200_000.0));
-    // Assert
+    // Act — 30th tick closes dwell and ramps; target 200kW away < 400kW step
+    let out = ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_200_000.0));
+    // Assert — settles exactly on target, then no further writes
     assert_eq!(out, Some(1_200_000.0));
-    // Act — a following tick with the same inputs, now settled to Normal:
-    // unchanged, no write.
-    let out2 = ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 1_200_000.0));
+    let out2 = ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 1_200_000.0));
     assert_eq!(out2, None);
 }
 
@@ -168,57 +167,54 @@ fn ramping_steps_at_configured_rate_then_settles_at_target() {
 fn fresh_violation_mid_ramp_immediately_re_clamps() {
     // Arrange — get into Ramping mode
     let mut ctrl = EnvelopeController::new(config(), 1_000_000.0);
-    ctrl.tick(tick(Some(1_000_000.0), None, 1_000_000.0, 3_000_000.0));
+    ctrl.tick(tick(None, Some(1_000_000.0), 1_000_000.0, 3_000_000.0));
     for _ in 0..30 {
-        ctrl.tick(tick(Some(2_000_000.0), None, 1_000_000.0, 3_000_000.0));
+        ctrl.tick(tick(None, Some(2_000_000.0), 1_000_000.0, 3_000_000.0));
     }
     let ramped = ctrl
-        .tick(tick(Some(2_000_000.0), None, 1_000_000.0, 3_000_000.0))
+        .tick(tick(None, Some(2_000_000.0), 1_000_000.0, 3_000_000.0))
         .unwrap();
     assert!(ramped > 1_000_000.0 && ramped < 3_000_000.0);
-    // Act — the limit tightens back down hard mid-ramp
-    let out = ctrl.tick(tick(Some(900_000.0), None, ramped, 3_000_000.0));
-    // Assert — instant re-clamp to the new, tighter ceiling
+    // Act — the export limit tightens hard mid-ramp
+    let out = ctrl.tick(tick(None, Some(900_000.0), ramped, 3_000_000.0));
+    // Assert — instant re-clamp to the new ceiling
     assert_eq!(out, Some(900_000.0));
 }
 
 #[test]
 fn ramp_step_is_direction_dependent_on_asymmetric_bounds() {
     // Arrange — small charge capacity, large discharge capacity: ramping
-    // toward import (positive) should use power_max, toward export
-    // (negative) should use power_min's magnitude — two different rates.
-    let small_min = -1_000_000.0;
-    let large_max = 4_000_000.0;
+    // toward discharge uses power_max, toward charge uses |power_min|.
     let asymmetric_tick =
         |import_limit, export_limit, active_power, requested_setpoint| EnvelopeTick {
             import_limit,
             export_limit,
             active_power,
             requested_setpoint,
-            power_min: small_min,
-            power_max: large_max,
+            power_min: -1_000_000.0,
+            power_max: 4_000_000.0,
             dt: ONE_SEC,
         };
 
-    // Act — ramp toward import (positive): max_step = 0.10 * 4_000_000 = 400_000
-    let mut import_ctrl = EnvelopeController::new(config(), 0.0);
-    import_ctrl.tick(asymmetric_tick(Some(0.0), None, 0.0, 1_000_000.0));
+    // Act — ramp toward discharge: max_step = 0.10 * 4MW = 400kW
+    let mut discharge = EnvelopeController::new(config(), 0.0);
+    discharge.tick(asymmetric_tick(None, Some(0.0), 0.0, 1_000_000.0));
     for _ in 0..29 {
-        import_ctrl.tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, 1_000_000.0));
+        discharge.tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, 1_000_000.0));
     }
-    let import_step = import_ctrl
-        .tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, 1_000_000.0))
+    let discharge_step = discharge
+        .tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, 1_000_000.0))
         .unwrap();
-    assert!((import_step - 400_000.0).abs() < f64::EPSILON);
+    assert!((discharge_step - 400_000.0).abs() < f64::EPSILON);
 
-    // Act — ramp toward export (negative): max_step = 0.10 * 1_000_000 = 100_000
-    let mut export_ctrl = EnvelopeController::new(config(), 0.0);
-    export_ctrl.tick(asymmetric_tick(None, Some(0.0), 0.0, -1_000_000.0));
+    // Act — ramp toward charge: max_step = 0.10 * 1MW = 100kW
+    let mut charge = EnvelopeController::new(config(), 0.0);
+    charge.tick(asymmetric_tick(Some(0.0), None, 0.0, -1_000_000.0));
     for _ in 0..29 {
-        export_ctrl.tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, -1_000_000.0));
+        charge.tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, -1_000_000.0));
     }
-    let export_step = export_ctrl
-        .tick(asymmetric_tick(None, Some(2_000_000.0), 0.0, -1_000_000.0))
+    let charge_step = charge
+        .tick(asymmetric_tick(Some(2_000_000.0), None, 0.0, -1_000_000.0))
         .unwrap();
-    assert!((export_step - -100_000.0).abs() < f64::EPSILON);
+    assert!((charge_step - -100_000.0).abs() < f64::EPSILON);
 }
