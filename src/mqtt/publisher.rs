@@ -10,6 +10,10 @@ use std::time::Duration;
 /// broker rejects bad creds with this; we surface it as a distinct error
 /// so app::run can fail-loud instead of retry-looping a credential mistake.
 const CONNACK_NOT_AUTHORIZED: i32 = 5;
+/// First reconnect retry after a lost connection; paho doubles it per failure.
+const RECONNECT_MIN: Duration = Duration::from_secs(1);
+/// Cap on the reconnect retry interval.
+const RECONNECT_MAX: Duration = Duration::from_secs(30);
 
 /// Payload for a float measurement reading.
 #[derive(Debug, Serialize)]
@@ -40,6 +44,11 @@ pub async fn connect(
     let conn_opts = ConnectOptionsBuilder::new()
         .keep_alive_interval(Duration::from_secs(20))
         .clean_session(true)
+        // Reason: paho's reconnect is off by default; without it a broker
+        // restart leaves the gateway running but permanently disconnected.
+        // Subscriptions don't survive the reconnect — subscriber::subscribe
+        // re-issues them from the connected callback.
+        .automatic_reconnect(RECONNECT_MIN, RECONNECT_MAX)
         .user_name(username)
         .password(password)
         .finalize();

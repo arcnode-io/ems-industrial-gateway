@@ -84,27 +84,24 @@ pub async fn subscribe(
     last_requested: LastRequestedSetpoints,
 ) -> Result<watch::Receiver<u64>> {
     let mut stream = client.get_stream(STREAM_CAPACITY);
+    // Beacon, dispatch commands (HMI operator → gateway, acked on
+    // events/dispatch_state by dispatch::handle_command), then every input.
+    let (topics, qos) = subscription_list(site_id, input_topics);
     client
-        .subscribe(TOPIC_TOPOLOGY_CHANGED, BEACON_QOS)
+        .subscribe_many(&topics, &qos)
         .await
-        .context("subscribe to system/topology_changed")?;
-    // Dispatch commands (HMI operator → gateway). Acked on
-    // events/dispatch_state by dispatch::handle_command.
-    let commands_filter = format!("sites/{site_id}/devices/+/commands/#");
-    client
-        .subscribe(&commands_filter, COMMAND_QOS)
-        .await
-        .with_context(|| format!("subscribe to {commands_filter}"))?;
-    for topic in input_topics {
-        client
-            .subscribe(topic, MEASUREMENT_QOS)
-            .await
-            .with_context(|| format!("subscribe to {topic}"))?;
-    }
+        .context("subscribe to beacon, commands and input topics")?;
     info!(
         input_topics = input_topics.len(),
         "MQTT subscriptions established",
     );
+    // Reason: subscriptions are broker-side session state. After a broker
+    // restart paho reconnects the socket but the broker holds none, so the
+    // gateway would go silently deaf. Re-issue them on every reconnect.
+    client.set_connected_callback(move |cli: &AsyncClient| {
+        cli.subscribe_many(&topics, &qos);
+        info!(topics = topics.len(), "MQTT reconnected; resubscribed");
+    });
 
     let (tx, rx) = watch::channel(0u64);
     let event_client = client.clone();
@@ -151,6 +148,21 @@ pub async fn subscribe(
     Ok(rx)
 }
 
+/// Every topic the gateway subscribes to, paired with its QoS: the topology
+/// beacon, the site's commands filter, then each measurement input.
+fn subscription_list(site_id: &str, input_topics: &[String]) -> (Vec<String>, Vec<i32>) {
+    let mut topics = vec![
+        TOPIC_TOPOLOGY_CHANGED.to_string(),
+        format!("sites/{site_id}/devices/+/commands/#"),
+    ];
+    let mut qos = vec![BEACON_QOS, COMMAND_QOS];
+    for topic in input_topics {
+        topics.push(topic.clone());
+        qos.push(MEASUREMENT_QOS);
+    }
+    (topics, qos)
+}
+
 /// Parse a FloatSample payload + write `(value, Instant::now())` into the
 /// cache. Malformed payloads logged and dropped — one bad sample shouldn't
 /// stop the subscriber loop.
@@ -190,6 +202,24 @@ mod tests {
         cache_float_sample(&cache, "topic", br#"{"ts":"now"}"#);
         // Assert — neither call inserted
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn subscription_list_covers_beacon_commands_and_every_input() {
+        // Arrange
+        let inputs = vec!["sites/s/devices/a/measurements/x/watts".to_string()];
+        // Act
+        let (topics, qos) = subscription_list("s", &inputs);
+        // Assert — what reconnect re-issues must match the initial subscribe
+        assert_eq!(
+            topics,
+            vec![
+                TOPIC_TOPOLOGY_CHANGED.to_string(),
+                "sites/s/devices/+/commands/#".to_string(),
+                inputs[0].clone(),
+            ]
+        );
+        assert_eq!(qos, vec![BEACON_QOS, COMMAND_QOS, MEASUREMENT_QOS]);
     }
 
     #[test]
