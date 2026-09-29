@@ -27,11 +27,13 @@ pub const APPROACH_GAIN_PER_SEC: f64 = 0.1;
 
 /// Gain while correcting a measured violation, per second of excess.
 ///
-/// Reason: over-correcting a violation because the meter lags only backs
-/// away from the limit (safe side); the slow approach gain then brings it
-/// back without overshoot. Faster than the approach so a load drop doesn't
-/// leave the site exporting for tens of seconds.
-pub const VIOLATION_GAIN_PER_SEC: f64 = 0.5;
+/// Reason: an integrator behind n ticks of lag is stable while gain <
+/// 2·sin(π/(2(2n+1))): 0.62 / 0.45 / 0.35 for n = 2 / 3 / 4 s. 0.3 stays
+/// stable to 4 s and, after a 2 s-lagged load drop, clears export in ~6 s
+/// while over-correcting ~135 kW of a 520 kW drop.
+/// Over-correcting only backs away from the limit (safe side), and it's
+/// capped by the opposite side's headroom so a tight band can't ring.
+pub const VIOLATION_GAIN_PER_SEC: f64 = 0.3;
 
 /// A limit, with the value it had on the previous tick.
 #[derive(Debug, Clone, Copy)]
