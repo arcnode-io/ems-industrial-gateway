@@ -177,6 +177,7 @@ async fn tick_once(
                 export_limit,
                 active_power,
                 requested_setpoint,
+                site_load: 0.0,
                 power_min: guard.power_min,
                 power_max: guard.power_max,
                 dt,

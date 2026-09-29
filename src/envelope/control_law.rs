@@ -11,13 +11,15 @@
 //! `requested_setpoint`, never toward some other value the operator never
 //! asked for.
 //!
-//! Sign convention: positive active_power = discharge (export), negative =
-//! charge (import) — battery-referenced, same as bess_rack's active_power and
-//! the rest of the dispatch path. So export_limit caps discharge (ceiling)
-//! and import_limit caps charge (floor = -import_limit).
+//! Sign convention: positive active_power = discharge, negative = charge —
+//! battery-referenced, same as bess_rack's active_power and the rest of the
+//! dispatch path.
 //!
-//! Limits are compared against the module's own active_power, i.e. the BESS
-//! is treated as the only asset at the POI; site load isn't counted.
+//! Limits apply at the POI, not to the battery alone. With site load
+//! `L = P_poi + P_bess` (P_poi + = import), POI export stays within
+//! export_limit while discharge ≤ `L + export_limit` (ceiling), and POI import
+//! stays within import_limit while discharge ≥ `L − import_limit` (floor).
+//! With no POI meter `L = 0`, which treats the BESS as the only asset.
 
 use std::time::Duration;
 
@@ -77,6 +79,9 @@ pub struct EnvelopeTick {
     pub active_power: f64,
     /// The last real operator/dispatcher setpoint request — the ramp target.
     pub requested_setpoint: f64,
+    /// Site load at the POI excluding the battery (POI import + battery
+    /// discharge). 0 when there's no POI meter, which is the battery-only law.
+    pub site_load: f64,
     /// Module's own static nameplate lower bound (max charge; negative).
     /// Ramp rate and hysteresis margin on the charge/import side are
     /// fractions of its magnitude.
@@ -113,8 +118,12 @@ impl EnvelopeController {
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
     pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
-        let ceiling = input.export_limit.unwrap_or(f64::INFINITY);
-        let floor = input.import_limit.map(|i| -i).unwrap_or(f64::NEG_INFINITY);
+        let ceiling = input
+            .export_limit
+            .map_or(f64::INFINITY, |e| input.site_load + e);
+        let floor = input
+            .import_limit
+            .map_or(f64::NEG_INFINITY, |i| input.site_load - i);
         let headroom_export = ceiling - input.active_power;
         let headroom_import = input.active_power - floor;
 

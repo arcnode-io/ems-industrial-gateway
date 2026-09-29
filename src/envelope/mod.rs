@@ -8,6 +8,8 @@
 
 pub mod control_law;
 #[cfg(test)]
+mod control_law_poi_test;
+#[cfg(test)]
 mod control_law_test;
 pub mod task;
 
