@@ -40,6 +40,9 @@ pub struct EnvelopeGuardConfig {
     pub export_limit_topic: String,
     /// MQTT topic template carrying the module's own live `active_power`.
     pub active_power_topic: String,
+    /// MQTT topic template carrying the POI meter's `active_power`; `None`
+    /// means no POI meter, so site load is taken as 0.
+    pub poi_active_power_topic: Option<String>,
 }
 
 /// Extract envelope-guard config from a `distribute` binding. `None` if any
@@ -56,6 +59,7 @@ pub fn envelope_guard_config(d: &DistributeBinding) -> Option<EnvelopeGuardConfi
         import_limit_topic: d.import_limit_topic.clone()?,
         export_limit_topic: d.export_limit_topic.clone()?,
         active_power_topic: d.active_power_topic.clone()?,
+        poi_active_power_topic: d.poi_active_power_topic.clone(),
     })
 }
 
@@ -165,6 +169,19 @@ async fn tick_once(
             let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
                 return; // hold — no active_power reading cached yet
             };
+            // Site load L = P_poi + P_bess. With a POI meter configured but no
+            // reading yet, hold: assuming L = 0 would under-count load and let
+            // charging push POI import past its limit.
+            let site_load = match &guard.poi_active_power_topic {
+                Some(topic) => {
+                    let topic = topic.replace("{site_id}", site_id);
+                    let Some(p_poi) = cache.get(&topic).map(|e| e.0) else {
+                        return; // hold — no POI reading cached yet
+                    };
+                    p_poi + active_power
+                }
+                None => 0.0,
+            };
             let import_limit_topic = guard.import_limit_topic.replace("{site_id}", site_id);
             let export_limit_topic = guard.export_limit_topic.replace("{site_id}", site_id);
             let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
@@ -177,7 +194,7 @@ async fn tick_once(
                 export_limit,
                 active_power,
                 requested_setpoint,
-                site_load: 0.0,
+                site_load,
                 power_min: guard.power_min,
                 power_max: guard.power_max,
                 dt,

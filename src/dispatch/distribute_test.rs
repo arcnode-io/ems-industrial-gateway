@@ -89,6 +89,7 @@ fn compute_shares_splits_equally_across_two_standby_children() {
         import_limit_topic: None,
         export_limit_topic: None,
         active_power_topic: None,
+        poi_active_power_topic: None,
     };
     // Act
     let mut shares = compute_shares(&binding, 200_000.0, "site_001", &cache).unwrap();
@@ -139,6 +140,7 @@ fn floored_pair(soc_1: f64, soc_2: f64) -> (DistributeBinding, InputCache) {
         import_limit_topic: None,
         export_limit_topic: None,
         active_power_topic: None,
+        poi_active_power_topic: None,
     };
     (binding, cache)
 }

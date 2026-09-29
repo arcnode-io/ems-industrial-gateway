@@ -24,6 +24,7 @@ fn distribute_binding(power_min: f64, power_max: f64) -> ProtocolBinding {
         import_limit_topic: None,
         export_limit_topic: None,
         active_power_topic: None,
+        poi_active_power_topic: None,
     })
 }
 

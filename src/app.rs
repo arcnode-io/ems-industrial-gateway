@@ -465,6 +465,9 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                     topics.insert(substitute_site_id(&guard.import_limit_topic, site_id));
                     topics.insert(substitute_site_id(&guard.export_limit_topic, site_id));
                     topics.insert(substitute_site_id(&guard.active_power_topic, site_id));
+                    if let Some(poi) = &guard.poi_active_power_topic {
+                        topics.insert(substitute_site_id(poi, site_id));
+                    }
                 }
             }
         }
@@ -685,6 +688,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             import_limit_topic: d.import_limit_topic.clone(),
             export_limit_topic: d.export_limit_topic.clone(),
             active_power_topic: d.active_power_topic.clone(),
+            poi_active_power_topic: d.poi_active_power_topic.clone(),
         }),
     }
 }

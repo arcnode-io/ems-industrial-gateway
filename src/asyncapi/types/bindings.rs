@@ -190,6 +190,11 @@ pub struct DistributeBinding {
     /// MQTT topic carrying the module's own live `active_power` reading.
     #[serde(default)]
     pub active_power_topic: Option<String>,
+    /// MQTT topic carrying the POI meter's `active_power` (+ import), so the
+    /// envelope bounds site net power rather than the battery alone. Optional
+    /// and outside the all-or-nothing guard set: absent means site load 0.
+    #[serde(default)]
+    pub poi_active_power_topic: Option<String>,
 }
 
 /// One child's identity + static bounds for command distribution.

@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 pub const MODULE_ID: &str = "bess_module_1";
 pub const RACK_1: &str = "rack_1";
 pub const RACK_2: &str = "rack_2";
+pub const POI_METER_ID: &str = "poi_meter_1";
 
 fn device(
     device_id: &str,
@@ -54,6 +55,13 @@ pub fn bess_dtm(rack1_port: u16, rack2_port: u16) -> Value {
             Some(MODULE_ID),
             Some(("127.0.0.1", rack2_port)),
         ),
+    );
+    // device-api requires exactly one poi_meter wherever a BESS is envelope-
+    // guarded (fbb75b6): the envelope bounds power at the POI. Dummy
+    // connection for the same reason as operating_envelope below.
+    devices.insert(
+        POI_METER_ID.to_string(),
+        device(POI_METER_ID, "poi_meter", None, Some(("127.0.0.1", 20001))),
     );
     devices.insert(
         "operating_envelope".to_string(),
