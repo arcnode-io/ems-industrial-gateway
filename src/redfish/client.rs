@@ -9,6 +9,9 @@ use crate::redfish::tls;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
@@ -26,10 +29,8 @@ pub async fn read_measurement(
     creds: Option<&GatewayCredentials>,
 ) -> Result<f64> {
     let (client, scheme) = match (trust, creds) {
-        (Some(DeviceTrust::TlsMutual { .. }), Some(creds)) => {
-            (tls::build_https_client(creds)?, "https")
-        }
-        _ => (build_plain_client()?, "http"),
+        (Some(DeviceTrust::TlsMutual { .. }), Some(creds)) => (https_client(creds)?, "https"),
+        _ => (plain_client()?, "http"),
     };
     let url = format!("{}://{}:{}/redfish/v1{}", scheme, b.host, b.port, b.uri);
 
@@ -45,12 +46,40 @@ pub async fn read_measurement(
         .with_context(|| format!("expected numeric Redfish value at {url}, got {value:?}"))
 }
 
-/// Plain HTTP client. Existing behavior — kept for pre-trust DTMs.
-fn build_plain_client() -> Result<Client> {
-    Client::builder()
+/// Process-wide plain HTTP client.
+///
+/// Reason: a `Client` pools connections, so building one per read opened a
+/// new TCP connection per poll. At ~100 BMCs polled every second, the closed
+/// ones pile up in TIME-WAIT and exhaust the host's ephemeral ports.
+fn plain_client() -> Result<Client> {
+    static PLAIN: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = PLAIN.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
-        .context("build reqwest plain Client")
+        .context("build reqwest plain Client")?;
+    Ok(PLAIN.get_or_init(|| client).clone())
+}
+
+/// HTTPS+mTLS client, cached per credential set (keyed by its three paths)
+/// so a process can never reuse a client built with a different identity.
+/// Also avoids re-reading the cert files and a full TLS handshake per poll.
+fn https_client(creds: &GatewayCredentials) -> Result<Client> {
+    type CredsKey = (PathBuf, PathBuf, PathBuf);
+    static MTLS: LazyLock<Mutex<HashMap<CredsKey, Client>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let key = (
+        creds.ca_bundle_path.clone(),
+        creds.cert_path.clone(),
+        creds.key_path.clone(),
+    );
+    if let Some(client) = MTLS.lock().unwrap().get(&key) {
+        return Ok(client.clone());
+    }
+    let client = tls::build_https_client(creds)?;
+    Ok(MTLS.lock().unwrap().entry(key).or_insert(client).clone())
 }
 
 /// HTTP(S) GET with exponential backoff on transient errors. Shared by both
@@ -76,3 +105,7 @@ async fn fetch(client: &Client, url: &str) -> Result<Value> {
     }
     Err(last_err.unwrap()).context("redfish fetch exhausted retries")
 }
+
+#[cfg(test)]
+#[path = "client_test.rs"]
+mod tests;
