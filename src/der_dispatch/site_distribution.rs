@@ -9,13 +9,20 @@
 //! Hybrid trigger, same as module→rack: one tick both reacts to
 //! target_active_power/event_active changing (poll cadence fast enough to
 //! read as immediate) and rebalances on module SoC drift alone. Holds (no
-//! publish) whenever event_active isn't true, or target/any module's own
-//! state hasn't landed in cache yet, or nothing's actually changed since the
-//! last dispatch — same "hold until known, write only on change" posture as
-//! everywhere else in this codebase.
+//! publish) while event_active, the target or any module's own state hasn't
+//! landed in cache yet, or nothing's changed since the last dispatch.
+//!
+//! An event that ENDS is not a hold. The modules keep whatever setpoint was
+//! last written, so holding would keep discharging into the reserve after
+//! the utility let go. On event_active false, each module the event
+//! dispatched is commanded back to its pre-event operator setpoint (0 if
+//! none), unless an operator commanded it mid-event. See `event_memory`.
 
 use crate::asyncapi::types::ProtocolBinding;
-use crate::dispatch::allocation::{self, AllocationPolicy, ChildCapacity, OperatingState};
+use crate::der_dispatch::SharedEventMemory;
+use crate::der_dispatch::module_bounds::modules_with_bounds;
+use crate::dispatch::LastRequestedSetpoints;
+use crate::dispatch::allocation::{self, AllocationPolicy};
 use crate::synthetic::InputCache;
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
@@ -32,7 +39,7 @@ use tracing::warn;
 const COMMAND_QOS: i32 = 1;
 /// The verb+target every bess_module command shares — site distribution is
 /// specifically about active power, same scope as Phase III overall.
-const CHANNEL_KEY: &str = "set_active_power";
+pub(super) const CHANNEL_KEY: &str = "set_active_power";
 
 /// Everything the site-distribution task needs to run forever.
 pub struct SiteDistributionConfig {
@@ -48,47 +55,80 @@ pub struct SiteDistributionConfig {
 
 /// Spawn the site-distribution loop. Mirrors `envelope::task::spawn`'s
 /// shutdown contract: the returned `JoinHandle` exits when `cancel` fires.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     cfg: SiteDistributionConfig,
     cache: InputCache,
     mqtt: AsyncClient,
     device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+    last_requested: LastRequestedSetpoints,
+    memory: SharedEventMemory,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let period_ms = (1000.0 / cfg.tick_hz).max(1.0) as u64;
         let mut ticker = interval(Duration::from_millis(period_ms));
-        // Last share actually dispatched per module — lets a tick where the
-        // site target is unchanged still dispatch only modules whose own
-        // SoC-weighted share drifted, and skip a redundant re-command
-        // otherwise (a real command message, not a cheap in-process write).
-        let mut last_dispatched: HashMap<String, f64> = HashMap::new();
         loop {
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    tick_once(&cfg, &cache, &mqtt, &device_channels, &mut last_dispatched).await;
+                    tick_once(&cfg, &cache, &mqtt, &device_channels, &last_requested, &memory).await;
                 }
             }
         }
     })
 }
 
+/// Each module's current operator setpoint, as `last_requested` records it.
+async fn operator_setpoints(last_requested: &LastRequestedSetpoints) -> HashMap<String, f64> {
+    last_requested
+        .read()
+        .await
+        .iter()
+        .filter_map(|(device, channels)| channels.get(CHANNEL_KEY).map(|v| (device.clone(), *v)))
+        .collect()
+}
+
+/// Event over: command each module the event dispatched back to its
+/// pre-event setpoint. Memory is cleared only once every restore publishes,
+/// so a failed publish is retried next tick rather than lost.
+async fn release(
+    cfg: &SiteDistributionConfig,
+    mqtt: &AsyncClient,
+    last_requested: &LastRequestedSetpoints,
+    memory: &SharedEventMemory,
+) {
+    let current = operator_setpoints(last_requested).await;
+    let restore = memory.lock().unwrap().end(&current);
+    let mut all_published = true;
+    for (module_id, setpoint) in restore {
+        all_published &= dispatch_one(mqtt, &cfg.site_id, &module_id, setpoint).await;
+    }
+    if all_published {
+        memory.lock().unwrap().clear();
+    }
+}
+
 /// One tick: react to der_dispatch's live target/event_active, rebalance
-/// across modules, dispatch only what changed.
+/// across modules, dispatch only what changed, or release an ended event.
+#[allow(clippy::too_many_arguments)]
 async fn tick_once(
     cfg: &SiteDistributionConfig,
     cache: &InputCache,
     mqtt: &AsyncClient,
     device_channels: &Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    last_dispatched: &mut HashMap<String, f64>,
+    last_requested: &LastRequestedSetpoints,
+    memory: &SharedEventMemory,
 ) {
     let Some(event_active) = cache.get(&cfg.event_active_topic).map(|e| e.0) else {
         return; // hold — event_active not cached yet
     };
     if event_active < 0.5 {
-        return; // hold — dispatch not currently active
+        release(cfg, mqtt, last_requested, memory).await;
+        return;
     }
+    let operator = operator_setpoints(last_requested).await;
+    memory.lock().unwrap().begin(|| operator);
     let Some(target) = cache.get(&cfg.target_topic).map(|e| e.0) else {
         return; // hold — target not cached yet
     };
@@ -103,18 +143,10 @@ async fn tick_once(
     }
 
     let shares = allocation::allocate(target, &modules, AllocationPolicy::SocWeighted);
-    let changed: Vec<(String, f64)> = shares
-        .into_iter()
-        .filter(|(id, share)| {
-            last_dispatched
-                .get(id)
-                .is_none_or(|prev| (share - prev).abs() >= f64::EPSILON)
-        })
-        .collect();
-
+    let changed = memory.lock().unwrap().changed(shares);
     for (module_id, share) in changed {
         if dispatch_one(mqtt, &cfg.site_id, &module_id, share).await {
-            last_dispatched.insert(module_id, share);
+            memory.lock().unwrap().record(&module_id, share);
         }
     }
 }
@@ -142,44 +174,3 @@ async fn dispatch_one(mqtt: &AsyncClient, site_id: &str, module_id: &str, share:
         }
     }
 }
-
-/// Every distribute-parent device (a `bess_module`) with a resolvable
-/// power_min/power_max (from its own Distribute binding) and cached
-/// state_of_charge. `None` if any known module's state_of_charge isn't
-/// cached yet — hold, same posture as everywhere else; an empty (but
-/// `Some`) result means there are simply no modules yet.
-fn modules_with_bounds(
-    channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
-    cache: &InputCache,
-    site_id: &str,
-    target: f64,
-) -> Option<Vec<ChildCapacity>> {
-    let mut modules = Vec::new();
-    for (device_id, commands) in channels {
-        let Some(ProtocolBinding::Distribute(d)) = commands.get(CHANNEL_KEY) else {
-            continue;
-        };
-        let (Some(power_min), Some(power_max)) = (d.power_min, d.power_max) else {
-            continue;
-        };
-        let soc_topic =
-            format!("sites/{site_id}/devices/{device_id}/measurements/state_of_charge/percent");
-        let state_of_charge = cache.get(&soc_topic).map(|e| e.0)?;
-        let headroom = if target < 0.0 {
-            power_min.abs()
-        } else {
-            power_max
-        };
-        modules.push(ChildCapacity {
-            device_id: device_id.clone(),
-            operating_state: OperatingState::Standby,
-            headroom,
-            state_of_charge,
-        });
-    }
-    Some(modules)
-}
-
-#[cfg(test)]
-#[path = "site_distribution_test.rs"]
-mod tests;

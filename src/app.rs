@@ -115,6 +115,10 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // as real commands arrive. Not reset on reconcile (a topology refresh
     // shouldn't forget what an operator most recently asked for).
     let last_requested: dispatch::LastRequestedSetpoints = Arc::new(RwLock::new(HashMap::new()));
+    // Curtailment-event memory (pre-event setpoints + what the event
+    // dispatched). Lives here, not in the task, so a reconcile mid-event
+    // doesn't re-snapshot the event's own setpoints as "pre-event".
+    let site_event = der_dispatch::new_event_memory();
     let mut beacon_rx = subscriber::subscribe(
         &mut client,
         &input_topics,
@@ -135,6 +139,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         last_requested.clone(),
         device_channels_map.clone(),
         device_trust_map.clone(),
+        site_event.clone(),
     );
 
     loop {
@@ -157,7 +162,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                         warn!(error = %e, "respawn fetch failed; keeping current task set");
                         // Re-spawn the old set so we don't end up idle.
                         let (h, c) =
-                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
+                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                         task_handles = h;
                         task_cancel = c;
                         continue;
@@ -171,12 +176,12 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                 {
                     warn!(error = %e, "new spec fails trust/creds alignment; keeping current task set");
                     let (h, c) =
-                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
+                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                     task_handles = h;
                     task_cancel = c;
                     continue;
                 }
-                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone());
+                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                 task_handles = h;
                 task_cancel = c;
             }
@@ -224,6 +229,7 @@ fn spawn_task_set(
     last_requested: dispatch::LastRequestedSetpoints,
     device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
     device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    site_event: der_dispatch::SharedEventMemory,
 ) -> (JoinSet<()>, CancellationToken) {
     let parent = CancellationToken::new();
     let mut handles = JoinSet::new();
@@ -368,6 +374,8 @@ fn spawn_task_set(
         cache.clone(),
         client.clone(),
         device_channels.clone(),
+        last_requested.clone(),
+        site_event,
         parent.child_token(),
     );
     handles.spawn(async move {

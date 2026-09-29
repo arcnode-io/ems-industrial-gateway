@@ -4,7 +4,10 @@
 //! devices exist).
 
 mod actual_power;
+mod event_memory;
+mod module_bounds;
 mod site_distribution;
 
 pub use actual_power::{DerDispatchTaskConfig, spawn};
+pub use event_memory::{SharedEventMemory, new_event_memory};
 pub use site_distribution::{SiteDistributionConfig, spawn as spawn_site_distribution};
