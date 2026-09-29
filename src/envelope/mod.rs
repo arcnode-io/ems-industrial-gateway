@@ -11,6 +11,9 @@ pub mod control_law;
 mod control_law_poi_test;
 #[cfg(test)]
 mod control_law_test;
+pub mod site_load;
+#[cfg(test)]
+mod site_load_test;
 pub mod task;
 
 pub use task::{EnvelopeGuardConfig, EnvelopeTaskConfig, envelope_guard_config};

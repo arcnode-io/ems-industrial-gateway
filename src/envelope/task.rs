@@ -13,6 +13,16 @@ use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::control_law::{EnvelopeConfig, EnvelopeController, EnvelopeTick};
+use crate::envelope::site_load::SiteLoadEstimate;
+
+/// How fast the site-load estimate may move, as a fraction of the pack's
+/// rated power (`power_max`) per second.
+///
+/// Reason: it exists to reject the battery's own steps, which a lagging POI
+/// meter briefly makes look like load. Scaling by the pack's rating (not any
+/// site's load) bounds that artifact to ~2% of rating for a ~2 s meter lag,
+/// while real load changes are still tracked within seconds.
+const SITE_LOAD_RAMP_FRACTION_PER_SEC: f64 = 0.01;
 use crate::synthetic::InputCache;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -101,10 +111,12 @@ pub fn spawn(
         // The initial requested_setpoint (before any real command has ever
         // arrived) is 0.0 — conservative: nothing to ramp toward yet, and a
         // real command populates `last_requested` before this could matter.
-        let mut controller = cfg
-            .guard
-            .as_ref()
-            .map(|g| EnvelopeController::new(g.control, 0.0));
+        let mut controller = cfg.guard.as_ref().map(|g| {
+            (
+                EnvelopeController::new(g.control, 0.0),
+                SiteLoadEstimate::new(SITE_LOAD_RAMP_FRACTION_PER_SEC * g.power_max),
+            )
+        });
         // Last share actually written per child — lets a tick where the
         // module-level target is unchanged still write only the children
         // whose own SoC-weighted share drifted, and skip the rest.
@@ -145,7 +157,7 @@ pub fn spawn(
 #[allow(clippy::too_many_arguments)]
 async fn tick_once(
     cfg: &EnvelopeTaskConfig,
-    controller: &mut Option<EnvelopeController>,
+    controller: &mut Option<(EnvelopeController, SiteLoadEstimate)>,
     last_written: &mut HashMap<String, f64>,
     dt: Duration,
     site_id: &str,
@@ -164,7 +176,7 @@ async fn tick_once(
         .unwrap_or(0.0);
 
     let target = match (&cfg.guard, controller.as_mut()) {
-        (Some(guard), Some(ctrl)) => {
+        (Some(guard), Some((ctrl, load_est))) => {
             let active_power_topic = guard.active_power_topic.replace("{site_id}", site_id);
             let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
                 return; // hold — no active_power reading cached yet
@@ -178,7 +190,7 @@ async fn tick_once(
                     let Some(p_poi) = cache.get(&topic).map(|e| e.0) else {
                         return; // hold — no POI reading cached yet
                     };
-                    p_poi + active_power
+                    load_est.update(p_poi + active_power, dt)
                 }
                 None => 0.0,
             };
