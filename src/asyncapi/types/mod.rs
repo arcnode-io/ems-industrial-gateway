@@ -10,7 +10,7 @@
 //! parse time by serde's typed deserialization.
 
 mod bindings;
-mod unprovisioned;
+mod source_map;
 
 pub use bindings::{
     BacnetIpBinding, BacnetScBinding, ChildAllocation, DistributeBinding, Dnp3TcpBinding,
@@ -32,7 +32,7 @@ pub struct AsyncApiSpec {
     /// Per-device, per-measurement protocol bindings + channel meta.
     #[serde(
         rename = "x-protocol-source",
-        deserialize_with = "unprovisioned::deserialize"
+        deserialize_with = "source_map::measurements"
     )]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolSource>>,
     /// Per-device, per-command protocol bindings + verb/target identity.
@@ -41,7 +41,7 @@ pub struct AsyncApiSpec {
     #[serde(
         rename = "x-command-source",
         default,
-        deserialize_with = "unprovisioned::deserialize"
+        deserialize_with = "source_map::commands"
     )]
     pub x_command_source: HashMap<String, HashMap<String, CommandSource>>,
     /// Per-device mutual-auth trust material (pinned cert / USM creds /
@@ -130,8 +130,8 @@ pub enum ProtocolBinding {
 }
 
 #[cfg(test)]
-#[path = "unprovisioned_test.rs"]
-mod unprovisioned_test;
+#[path = "source_map_test.rs"]
+mod source_map_test;
 
 #[cfg(test)]
 mod tests {

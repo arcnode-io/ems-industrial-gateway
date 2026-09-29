@@ -645,6 +645,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             offset: m.offset,
             data_type: m.data_type,
             word_order: m.word_order,
+            function_code: m.function_code,
         }),
         ProtocolBinding::Snmp(s) => ProtocolBinding::Snmp(SnmpBinding {
             host: s.host.clone(),

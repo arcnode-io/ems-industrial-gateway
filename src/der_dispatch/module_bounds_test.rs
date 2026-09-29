@@ -38,6 +38,7 @@ fn modbus_binding() -> ProtocolBinding {
         offset: 0.0,
         data_type: ModbusDataType::Int32,
         word_order: WordOrder::HighLow,
+        function_code: Some(16),
     })
 }
 

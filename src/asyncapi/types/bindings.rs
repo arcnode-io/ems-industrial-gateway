@@ -29,6 +29,11 @@ pub struct ModbusTcpBinding {
     /// Multi-register word order. Defaults to `HighLow`.
     #[serde(default)]
     pub word_order: WordOrder,
+    /// Modbus function code: 3/4 for a measurement (holding/input
+    /// registers), 6/16 for a command (write single/multiple). Absent keeps
+    /// the old FC3 read / FC16 write. Checked per entry at spec parse.
+    #[serde(default)]
+    pub function_code: Option<u8>,
 }
 
 /// SNMP v2c binding fields.
