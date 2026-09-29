@@ -10,6 +10,7 @@
 //! parse time by serde's typed deserialization.
 
 mod bindings;
+mod unprovisioned;
 
 pub use bindings::{
     BacnetIpBinding, BacnetScBinding, ChildAllocation, DistributeBinding, Dnp3TcpBinding,
@@ -29,12 +30,19 @@ pub struct AsyncApiSpec {
     #[validate(nested)]
     pub info: SpecInfo,
     /// Per-device, per-measurement protocol bindings + channel meta.
-    #[serde(rename = "x-protocol-source")]
+    #[serde(
+        rename = "x-protocol-source",
+        deserialize_with = "unprovisioned::deserialize"
+    )]
     pub x_protocol_source: HashMap<String, HashMap<String, ProtocolSource>>,
     /// Per-device, per-command protocol bindings + verb/target identity.
     /// Empty if the spec predates the command/measurement split (default =
     /// no dispatchable commands).
-    #[serde(rename = "x-command-source", default)]
+    #[serde(
+        rename = "x-command-source",
+        default,
+        deserialize_with = "unprovisioned::deserialize"
+    )]
     pub x_command_source: HashMap<String, HashMap<String, CommandSource>>,
     /// Per-device mutual-auth trust material (pinned cert / USM creds /
     /// `none`). Keyed by device_id, parallel to `x-protocol-source`. Empty if
@@ -120,6 +128,10 @@ pub enum ProtocolBinding {
     #[serde(rename = "distribute")]
     Distribute(DistributeBinding),
 }
+
+#[cfg(test)]
+#[path = "unprovisioned_test.rs"]
+mod unprovisioned_test;
 
 #[cfg(test)]
 mod tests {
