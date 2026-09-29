@@ -15,12 +15,12 @@
 //! battery-referenced, same as bess_rack's active_power and the rest of the
 //! dispatch path.
 //!
-//! Limits apply at the POI, not to the battery alone. With site load
-//! `L = P_poi + P_bess` (P_poi + = import), POI export stays within
-//! export_limit while discharge ≤ `L + export_limit` (ceiling), and POI import
-//! stays within import_limit while discharge ≥ `L − import_limit` (floor).
-//! With no POI meter `L = 0`, which treats the BESS as the only asset.
+//! With a POI meter, limits apply at the POI and the bounds come from
+//! `poi_servo` (an integrator on measured POI headroom). Without one, the
+//! BESS is treated as the only asset: discharge ≤ export_limit, charge ≥
+//! −import_limit.
 
+use crate::envelope::bounds;
 use std::time::Duration;
 
 /// Which side of the envelope is currently binding, if any.
@@ -65,6 +65,8 @@ pub struct EnvelopeController {
     current_output: f64,
     /// Configured ramp/hysteresis parameters for this controller.
     config: EnvelopeConfig,
+    /// Last tick's limits, so the POI servo can tell a tightening from lag.
+    prev_limits: (Option<f64>, Option<f64>),
 }
 
 /// One tick's live inputs.
@@ -79,9 +81,9 @@ pub struct EnvelopeTick {
     pub active_power: f64,
     /// The last real operator/dispatcher setpoint request — the ramp target.
     pub requested_setpoint: f64,
-    /// Site load at the POI excluding the battery (POI import + battery
-    /// discharge). 0 when there's no POI meter, which is the battery-only law.
-    pub site_load: f64,
+    /// The POI meter's `active_power` (+ import); `None` when the site has
+    /// no POI meter, which is the battery-only law.
+    pub poi_active_power: Option<f64>,
     /// Module's own static nameplate lower bound (max charge; negative).
     /// Ramp rate and hysteresis margin on the charge/import side are
     /// fractions of its magnitude.
@@ -104,6 +106,7 @@ impl EnvelopeController {
             dwell_elapsed: Duration::ZERO,
             current_output: initial_output,
             config,
+            prev_limits: (None, None),
         }
     }
 
@@ -118,14 +121,13 @@ impl EnvelopeController {
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
     pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
-        let ceiling = input
-            .export_limit
-            .map_or(f64::INFINITY, |e| input.site_load + e);
-        let floor = input
-            .import_limit
-            .map_or(f64::NEG_INFINITY, |i| input.site_load - i);
-        let headroom_export = ceiling - input.active_power;
-        let headroom_import = input.active_power - floor;
+        let bounds::Bounds {
+            ceiling,
+            floor,
+            headroom_export,
+            headroom_import,
+        } = bounds::for_tick(self.prev_limits, &input);
+        self.prev_limits = (input.import_limit, input.export_limit);
 
         if headroom_export <= 0.0 || headroom_import <= 0.0 {
             // Tightening, or a fresh violation — instant clamp, no ramp,

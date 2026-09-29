@@ -1,8 +1,7 @@
-//! e2e: a lagging POI meter must not make the envelope ring. Site load is
-//! meter + battery, and the meter's reading trails the battery's by 1–2 s.
-//! Unfiltered, a battery step is briefly counted as load and the target
-//! doubles, exporting the whole site load. The load estimate is rate-limited
-//! to a fraction of the pack's rating, so the step can't reach it.
+//! e2e: a lagging POI meter must not make the envelope ring. The meter's
+//! reading trails the battery's by 1–3 s; a law that feeds on its own lag
+//! exported half the site load on the demo. Closed loop here: the test plays
+//! the meter, reading the racks and reporting the POI 2 s late.
 
 mod fixtures;
 
@@ -13,6 +12,7 @@ use fixtures::containers::{start_hivemq, start_mock_modbus_server_writable};
 use fixtures::spec_stub::spawn_asyncapi_stub;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, Message};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -22,8 +22,10 @@ const MODULE_ID: &str = "bess_module_1";
 const METER_ID: &str = "meter_01";
 const RACKS: [&str; 2] = ["rack_1", "rack_2"];
 const LOAD_W: f64 = 1_120_000.0;
-/// 1%/s of the binding's 8 MW power_max.
-const RAMP_W_PER_S: f64 = 80_000.0;
+/// Meter lag, in 500 ms samples (2 s).
+const METER_LAG_SAMPLES: usize = 4;
+/// How long the loop runs; the approach settles in ~30 s.
+const RUN_FOR: Duration = Duration::from_secs(45);
 
 fn rack_command(port: u16) -> Value {
     json!({
@@ -62,7 +64,7 @@ async fn publish(op: &AsyncClient, device: &str, measurement: &str, value: f64) 
 }
 
 #[tokio::test]
-async fn battery_step_seen_through_a_lagging_meter_does_not_double_the_target() -> Result<()> {
+async fn a_lagging_meter_does_not_ring_the_envelope_into_export() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
     // Arrange — [0, 0] envelope: POI may neither import nor export, so the
     // envelope's floor forces the battery to carry the whole 1.12 MW load.
@@ -127,38 +129,46 @@ async fn battery_step_seen_through_a_lagging_meter_does_not_double_the_target() 
     }
     publish(&op, "operating_envelope", "import_limit/watts", 0.0).await?;
     publish(&op, "operating_envelope", "export_limit/watts", 0.0).await?;
-    publish(&op, METER_ID, "active_power/watts", LOAD_W).await?;
+    // Seed the loop so the envelope has a POI reading to start from; the
+    // rack registers only exist once the gateway's first write lands. A
+    // failed probe read retries for up to ~15 s itself, hence the 30 s wait.
     publish(&op, MODULE_ID, "active_power/watts", 0.0).await?;
-    // The envelope's floor drives the racks to carry the load.
-    timeout(Duration::from_secs(15), async {
-        while racks_total(ports).await? != LOAD_W as i64 {
+    publish(&op, METER_ID, "active_power/watts", LOAD_W).await?;
+    timeout(Duration::from_secs(30), async {
+        while racks_total(ports).await.is_err() {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        anyhow::Ok(())
     })
-    .await??;
+    .await?;
 
-    // Act — the battery now reports its 1.12 MW, but the meter hasn't caught
-    // up and still shows the full load imported: raw site load reads 2.24 MW.
-    publish(&op, MODULE_ID, "active_power/watts", LOAD_W).await?;
+    // Act — close the loop: module reading is fresh, meter reading is 2 s old
+    let mut meter: VecDeque<f64> = VecDeque::from(vec![LOAD_W; METER_LAG_SAMPLES]);
+    let mut true_poi = Vec::new();
     let started = Instant::now();
-    let mut peak = 0i64;
-    while started.elapsed() < Duration::from_secs(3) {
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        peak = peak.max(racks_total(ports).await?);
+    while started.elapsed() < RUN_FOR {
+        #[allow(clippy::cast_precision_loss)]
+        let battery = racks_total(ports).await? as f64;
+        true_poi.push(LOAD_W - battery);
+        meter.push_back(LOAD_W - battery);
+        publish(&op, MODULE_ID, "active_power/watts", battery).await?;
+        publish(
+            &op,
+            METER_ID,
+            "active_power/watts",
+            meter.pop_front().unwrap(),
+        )
+        .await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    let elapsed_s = started.elapsed().as_secs_f64();
 
-    // Assert — the meter never catches up here, so the estimate keeps
-    // ramping toward the 2.24 MW raw reading, but no faster than 1%/s of the
-    // 8 MW rating (80 kW/s). One extra second of slack covers tick phase.
-    // Unfiltered, the racks jump straight to 2.24 MW on the first tick.
-    #[allow(clippy::cast_possible_truncation)]
-    let bound = LOAD_W as i64 + (RAMP_W_PER_S * (elapsed_s + 1.0)) as i64;
+    // Assert — the POI never exports (a few W of slack for the integer
+    // rack split), and the battery ends up carrying the load
+    let worst = true_poi.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(worst >= -10.0, "POI exported {:.0} W", -worst);
+    let last = *true_poi.last().unwrap();
     assert!(
-        peak <= bound,
-        "racks peaked at {peak} W after {elapsed_s:.1}s (bound {bound} W): \
-         the lagged step reached the load estimate faster than the ramp"
+        last.abs() < 0.05 * LOAD_W,
+        "POI settled at {last:.0} W, not ~0"
     );
 
     cancel.cancel();
