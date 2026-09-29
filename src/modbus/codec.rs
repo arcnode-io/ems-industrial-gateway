@@ -34,6 +34,8 @@ pub enum ModbusDataType {
     Uint32,
     /// IEEE-754 single-precision float, 2 registers.
     Float32,
+    /// Signed 64-bit, 4 registers (e.g. ION9000 energy counters in Wh).
+    Int64,
 }
 
 impl ModbusDataType {
@@ -42,6 +44,7 @@ impl ModbusDataType {
         match self {
             ModbusDataType::Int16 | ModbusDataType::Uint16 => 1,
             ModbusDataType::Int32 | ModbusDataType::Uint32 | ModbusDataType::Float32 => 2,
+            ModbusDataType::Int64 => 4,
         }
     }
 }
@@ -75,6 +78,34 @@ pub fn encode_int32(value: i32, order: WordOrder) -> [u16; 2] {
     encode_uint32(value as u32, order)
 }
 
+/// Decode four consecutive u16 holding registers as a signed 64-bit integer.
+/// `HighLow` = big-endian word order (word 0 most significant, per the
+/// ION9000 map); `LowHigh` reverses all four words.
+pub fn decode_int64(words: &[u16], order: WordOrder) -> i64 {
+    let ordered = match order {
+        WordOrder::HighLow => [words[0], words[1], words[2], words[3]],
+        WordOrder::LowHigh => [words[3], words[2], words[1], words[0]],
+    };
+    ordered
+        .iter()
+        .fold(0u64, |acc, w| (acc << 16) | u64::from(*w)) as i64
+}
+
+/// Encode a signed 64-bit integer as four consecutive u16 holding registers.
+pub fn encode_int64(value: i64, order: WordOrder) -> [u16; 4] {
+    let raw = value as u64;
+    let big_endian = [
+        (raw >> 48) as u16,
+        (raw >> 32) as u16,
+        (raw >> 16) as u16,
+        raw as u16,
+    ];
+    match order {
+        WordOrder::HighLow => big_endian,
+        WordOrder::LowHigh => [big_endian[3], big_endian[2], big_endian[1], big_endian[0]],
+    }
+}
+
 /// Decode a measurement's raw (pre-scale) numeric value per its data type.
 /// `words` must hold at least `data_type.register_count()` entries.
 pub fn decode_raw(words: &[u16], data_type: ModbusDataType, order: WordOrder) -> f64 {
@@ -84,6 +115,7 @@ pub fn decode_raw(words: &[u16], data_type: ModbusDataType, order: WordOrder) ->
         ModbusDataType::Int32 => decode_int32(words, order) as f64,
         ModbusDataType::Uint32 => decode_uint32(words, order) as f64,
         ModbusDataType::Float32 => f32::from_bits(decode_uint32(words, order)) as f64,
+        ModbusDataType::Int64 => decode_int64(words, order) as f64,
     }
 }
 
@@ -96,6 +128,7 @@ pub fn encode_raw(raw: f64, data_type: ModbusDataType, order: WordOrder) -> Vec<
         ModbusDataType::Int32 => encode_int32(raw.round() as i32, order).to_vec(),
         ModbusDataType::Uint32 => encode_uint32(raw.round() as u32, order).to_vec(),
         ModbusDataType::Float32 => encode_uint32((raw as f32).to_bits(), order).to_vec(),
+        ModbusDataType::Int64 => encode_int64(raw.round() as i64, order).to_vec(),
     }
 }
 

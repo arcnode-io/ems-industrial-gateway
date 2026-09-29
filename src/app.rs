@@ -642,6 +642,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             host: s.host.clone(),
             port: s.port,
             oid: s.oid.clone(),
+            scale: s.scale,
         }),
         ProtocolBinding::Redfish(r) => ProtocolBinding::Redfish(RedfishBinding {
             host: r.host.clone(),

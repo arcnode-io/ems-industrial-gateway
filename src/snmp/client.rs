@@ -56,7 +56,7 @@ pub async fn read_measurement(
             _ => try_get_v2c(&endpoint, &oid).await,
         };
         match outcome {
-            Ok(v) => return Ok(v),
+            Ok(v) => return Ok(scaled(v, b)),
             Err(e) => {
                 warn!(attempt, error = %e, "snmp get failed; retrying");
                 last_err = Some(e);
@@ -164,6 +164,11 @@ fn load_usm_passphrases(security_name: &str) -> Result<(String, String)> {
     Ok((auth_pass, priv_pass))
 }
 
+/// Raw SNMP integer to engineering units (e.g. 0.01 A per count).
+fn scaled(raw: f64, b: &SnmpBinding) -> f64 {
+    raw * b.scale
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +194,26 @@ mod tests {
         // Assert — uppercase + hyphens-to-underscores normalization works
         assert_eq!(auth, "authsecret");
         assert_eq!(priv_, "privsecret");
+    }
+
+    #[test]
+    fn scale_multiplies_the_raw_integer() {
+        // Sentry4-MIB reports st4LineCurrent in 0.01 A: raw 1234 = 12.34 A.
+        let b: SnmpBinding = serde_json::from_value(serde_json::json!({
+            "host": "pdu", "port": 161, "oid": "1.3.6.1.4.1.1718.4.1.4.3.1.3.1.1.1",
+            "scale": 0.01,
+        }))
+        .unwrap();
+        assert!((scaled(1234.0, &b) - 12.34).abs() < 1e-9);
+    }
+
+    #[test]
+    fn absent_scale_leaves_the_value_unchanged() {
+        // Specs from before the field existed must read exactly as before.
+        let b: SnmpBinding = serde_json::from_value(serde_json::json!({
+            "host": "pdu", "port": 161, "oid": "1.3.6.1.2.1.1.3.0",
+        }))
+        .unwrap();
+        assert_eq!(scaled(1234.0, &b), 1234.0);
     }
 }

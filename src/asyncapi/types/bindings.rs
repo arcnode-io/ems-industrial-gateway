@@ -40,6 +40,15 @@ pub struct SnmpBinding {
     pub port: u16,
     /// Object identifier in dotted-numeric form, e.g. "1.3.6.1.4.1.41999.1.1.0".
     pub oid: String,
+    /// Multiplier from the raw integer to engineering units (e.g. 0.01 for a
+    /// MIB that reports current in hundredths of an amp). Absent = 1.0.
+    #[serde(default = "unit_scale")]
+    pub scale: f64,
+}
+
+/// `SnmpBinding::scale` when a spec omits it.
+fn unit_scale() -> f64 {
+    1.0
 }
 
 /// Redfish (HTTP+JSON, DSP0266) binding fields.

@@ -72,3 +72,49 @@ fn encode_decode_raw_round_trips_for_every_data_type() {
         );
     }
 }
+
+#[test]
+fn int64_spans_four_registers() {
+    assert_eq!(ModbusDataType::Int64.register_count(), 4);
+}
+
+#[test]
+fn int64_high_low_is_big_endian_word_order() {
+    // 0x0000_0001_0002_0003 — word 0 most significant (ION9000 map).
+    let value = decode_raw(&[0, 1, 2, 3], ModbusDataType::Int64, WordOrder::HighLow);
+    assert_eq!(value, ((1u64 << 32) | (2 << 16) | 3) as f64);
+}
+
+#[test]
+fn int64_low_high_reverses_all_four_words() {
+    let value = decode_raw(&[3, 2, 1, 0], ModbusDataType::Int64, WordOrder::LowHigh);
+    assert_eq!(value, ((1u64 << 32) | (2 << 16) | 3) as f64);
+}
+
+#[test]
+fn int64_negative_decodes_as_twos_complement() {
+    let value = decode_raw(
+        &[0xFFFF, 0xFFFF, 0xFFFF, 0xFFFE],
+        ModbusDataType::Int64,
+        WordOrder::HighLow,
+    );
+    assert_eq!(value, -2.0);
+}
+
+#[test]
+fn int64_round_trips_through_encode() {
+    for order in [WordOrder::HighLow, WordOrder::LowHigh] {
+        let words = encode_raw(-123_456_789_012.0, ModbusDataType::Int64, order);
+        assert_eq!(words.len(), 4);
+        assert_eq!(
+            decode_raw(&words, ModbusDataType::Int64, order),
+            -123_456_789_012.0
+        );
+    }
+}
+
+#[test]
+fn int64_parses_from_the_wire_name() {
+    let parsed: ModbusDataType = serde_json::from_str(r#""int64""#).unwrap();
+    assert_eq!(parsed, ModbusDataType::Int64);
+}
