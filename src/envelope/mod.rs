@@ -12,6 +12,7 @@ pub mod control_law;
 mod control_law_servo_test;
 #[cfg(test)]
 mod control_law_test;
+pub mod inputs;
 pub mod poi_servo;
 #[cfg(test)]
 mod poi_servo_test;

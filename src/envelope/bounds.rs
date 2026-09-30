@@ -17,13 +17,13 @@ pub struct Bounds {
     pub headroom_import: f64,
 }
 
-/// This tick's bounds. `prev_limits` is last tick's (import, export), which
-/// the POI servo needs to spot a tightening.
+/// This tick's bounds for commanded output `u`. `prev_limits` is last
+/// tick's (import, export), which the POI servo needs to spot a tightening.
 #[must_use]
-pub fn for_tick(prev_limits: (Option<f64>, Option<f64>), t: &EnvelopeTick) -> Bounds {
+pub fn for_tick(u: f64, prev_limits: (Option<f64>, Option<f64>), t: &EnvelopeTick) -> Bounds {
     match t.poi_active_power {
         Some(p_poi) => poi_servo::bounds(
-            t.active_power,
+            u,
             p_poi,
             Limit {
                 now: t.import_limit,

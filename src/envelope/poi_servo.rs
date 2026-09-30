@@ -4,11 +4,11 @@
 //! Reason: the POI meter reads the battery's own steps 1–3 s late. Any law
 //! that computes load as `P_poi + P_bess` and clamps to it counts each step
 //! twice and feeds on its own lag. That rang into export on the demo. Here
-//! the bounds are the battery's measured output nudged by a fraction of the
-//! measured POI headroom per second, which is an integrator: slow enough, it
-//! can't overshoot through the lag. Stepping from the measured output (not
-//! the last write) follows direct operator writes, and while the battery is
-//! still slewing it holds the command back, never ahead.
+//! the bounds are the commanded output nudged by a fraction of the measured
+//! POI headroom per second, which is an integrator: slow enough, it can't
+//! overshoot through the lag. It steps from what was commanded, never from
+//! the battery's reading: a summed reading lags a tick or two, and pairing a
+//! stale battery total with a fresh POI re-creates the double count.
 //!
 //! Sign: `p_poi` + = import. Export headroom `p_poi + export_limit` (room
 //! to discharge more), import headroom `import_limit − p_poi` (room to
@@ -44,19 +44,19 @@ pub struct Limit {
     pub prev: Option<f64>,
 }
 
-/// Bounds for the next output, from the battery's measured `active_power`
-/// and a POI reading.
+/// Bounds for the next output, from the commanded output `u` and a POI
+/// reading.
 #[must_use]
-pub fn bounds(active_power: f64, p_poi: f64, import: Limit, export: Limit, dt: Duration) -> Bounds {
+pub fn bounds(u: f64, p_poi: f64, import: Limit, export: Limit, dt: Duration) -> Bounds {
     let headroom_export = headroom(p_poi, export.now);
     let headroom_import = headroom(-p_poi, import.now);
     let up = step(p_poi, export, headroom_export, headroom_import, dt);
     let down = step(-p_poi, import, headroom_import, headroom_export, dt);
-    let ceiling = active_power + up;
+    let ceiling = u + up;
     // Reason: they only cross when a tightening jump on one side outruns the
     // rate limit on the other; that rate limit isn't a real bound, so let
     // the jump win, export side first (reverse power at the POI trips).
-    let floor = (active_power - down).min(ceiling);
+    let floor = (u - down).min(ceiling);
     Bounds {
         ceiling,
         floor,

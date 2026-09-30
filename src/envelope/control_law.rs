@@ -21,6 +21,7 @@
 //! −import_limit.
 
 use crate::envelope::bounds;
+pub use crate::envelope::inputs::{EnvelopeConfig, EnvelopeTick};
 use std::time::Duration;
 
 /// Which side of the envelope is currently binding, if any.
@@ -33,23 +34,6 @@ enum Mode {
     /// Limit cleared with sustained margin — output ramping back toward
     /// `requested_setpoint`.
     Ramping,
-}
-
-/// Configured control-law parameters — engineering-judgment defaults, not
-/// sourced from a verified standard (see power-engineer's envelope-control-
-/// law handoff, 2026-09-18). Configured per module, not hardcoded, so they
-/// can be corrected once a real IEEE 1547 / interconnection number is in
-/// hand without a code change.
-#[derive(Debug, Clone, Copy)]
-pub struct EnvelopeConfig {
-    /// Ramp rate on recovery, as a fraction of rated power per second
-    /// (e.g. `0.10` = 10%/sec).
-    pub ramp_rate_per_sec: f64,
-    /// Required headroom margin to close a constrained event, as a
-    /// fraction of rated power (e.g. `0.05` = 5%).
-    pub hysteresis_margin: f64,
-    /// How long that margin must hold continuously before closing the event.
-    pub hysteresis_dwell: Duration,
 }
 
 /// One module's envelope controller. Owns no I/O — the caller feeds it
@@ -67,33 +51,9 @@ pub struct EnvelopeController {
     config: EnvelopeConfig,
     /// Last tick's limits, so the POI servo can tell a tightening from lag.
     prev_limits: (Option<f64>, Option<f64>),
-}
-
-/// One tick's live inputs.
-#[derive(Debug, Clone, Copy)]
-pub struct EnvelopeTick {
-    /// Live `import_limit` (a positive magnitude) — caps charging. `None`
-    /// until the upstream signal has published one.
-    pub import_limit: Option<f64>,
-    /// Live `export_limit` (a positive magnitude) — caps discharging.
-    pub export_limit: Option<f64>,
-    /// The module's real, current `active_power` reading.
-    pub active_power: f64,
-    /// The last real operator/dispatcher setpoint request — the ramp target.
-    pub requested_setpoint: f64,
-    /// The POI meter's `active_power` (+ import); `None` when the site has
-    /// no POI meter, which is the battery-only law.
-    pub poi_active_power: Option<f64>,
-    /// Module's own static nameplate lower bound (max charge; negative).
-    /// Ramp rate and hysteresis margin on the charge/import side are
-    /// fractions of its magnitude.
-    pub power_min: f64,
-    /// Module's own static nameplate upper bound (max discharge; positive).
-    /// Ramp rate and hysteresis margin on the discharge/export side are
-    /// fractions of this.
-    pub power_max: f64,
-    /// Time since the previous tick.
-    pub dt: Duration,
+    /// Last tick's `requested_setpoint`. A change means `handle_command`
+    /// just wrote it straight to the device.
+    last_requested: Option<f64>,
 }
 
 impl EnvelopeController {
@@ -107,6 +67,7 @@ impl EnvelopeController {
             current_output: initial_output,
             config,
             prev_limits: (None, None),
+            last_requested: None,
         }
     }
 
@@ -121,12 +82,22 @@ impl EnvelopeController {
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
     pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
+        // Reason: an operator command is written to the device directly,
+        // outside this controller. Knowing that, the device now holds it —
+        // more exact than any reading, which may still be catching up.
+        if self
+            .last_requested
+            .is_some_and(|r| r != input.requested_setpoint)
+        {
+            self.current_output = input.requested_setpoint;
+        }
+        self.last_requested = Some(input.requested_setpoint);
         let bounds::Bounds {
             ceiling,
             floor,
             headroom_export,
             headroom_import,
-        } = bounds::for_tick(self.prev_limits, &input);
+        } = bounds::for_tick(self.current_output, self.prev_limits, &input);
         self.prev_limits = (input.import_limit, input.export_limit);
 
         if headroom_export <= 0.0 || headroom_import <= 0.0 {

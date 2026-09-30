@@ -158,6 +158,26 @@ fn operating_state_from_f64(raw: f64) -> Result<OperatingState> {
     }
 }
 
+/// Order child writes so every share that shrinks (in magnitude) lands
+/// before any that grows. `last` holds each child's last written share; a
+/// child never written counts as 0.
+///
+/// Reason: writes land one device at a time. Raising one child before
+/// lowering another briefly puts both on the bus at once, which a POI meter
+/// sees as export (or import). Lowering first only under-delivers briefly.
+pub fn reductions_first(
+    mut changed: Vec<(String, f64)>,
+    last: &HashMap<String, f64>,
+) -> Vec<(String, f64)> {
+    let growth = |(id, share): &(String, f64)| share.abs() - last.get(id).map_or(0.0, |p| p.abs());
+    changed.sort_by(|a, b| growth(a).total_cmp(&growth(b)));
+    changed
+}
+
+#[cfg(test)]
+#[path = "write_order_test.rs"]
+mod write_order_test;
+
 #[cfg(test)]
 #[path = "distribute_test.rs"]
 mod tests;

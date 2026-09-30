@@ -98,13 +98,11 @@ pub fn spawn(
     tokio::spawn(async move {
         let period_ms = (1000.0 / cfg.tick_hz).max(1.0) as u64;
         let mut ticker = interval(Duration::from_millis(period_ms));
-        // The initial requested_setpoint (before any real command has ever
-        // arrived) is 0.0 — conservative: nothing to ramp toward yet, and a
-        // real command populates `last_requested` before this could matter.
-        let mut controller = cfg
-            .guard
-            .as_ref()
-            .map(|g| EnvelopeController::new(g.control, 0.0));
+        // Built on the first tick with every input present, seeded with that
+        // tick's active_power: the device's real starting output, not an
+        // assumed 0. The initial requested_setpoint (before any real
+        // command) is 0.0.
+        let mut controller: Option<EnvelopeController> = None;
         // Last share actually written per child — lets a tick where the
         // module-level target is unchanged still write only the children
         // whose own SoC-weighted share drifted, and skip the rest.
@@ -163,8 +161,8 @@ async fn tick_once(
         .copied()
         .unwrap_or(0.0);
 
-    let target = match (&cfg.guard, controller.as_mut()) {
-        (Some(guard), Some(ctrl)) => {
+    let target = match &cfg.guard {
+        Some(guard) => {
             let active_power_topic = guard.active_power_topic.replace("{site_id}", site_id);
             let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
                 return; // hold — no active_power reading cached yet
@@ -186,6 +184,11 @@ async fn tick_once(
             let export_limit_topic = guard.export_limit_topic.replace("{site_id}", site_id);
             let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
             let export_limit = cache.get(&export_limit_topic).map(|e| e.0);
+            // Built here, once every input is present, so its seed is this
+            // tick's reading. Reason: building it on a tick that then held
+            // seeded it from whatever was cached first, often a stale 0.
+            let ctrl = controller
+                .get_or_insert_with(|| EnvelopeController::new(guard.control, active_power));
             // The clamped/ramped value either way — `tick`'s Some/None only
             // says whether it *changed* this tick, but the rebalance below
             // needs the current target regardless.
@@ -201,7 +204,7 @@ async fn tick_once(
             });
             ctrl.current_output()
         }
-        _ => requested_setpoint,
+        None => requested_setpoint,
     };
 
     let ProtocolBinding::Distribute(d) = &cfg.binding else {
@@ -223,6 +226,7 @@ async fn tick_once(
     if changed.is_empty() {
         return;
     }
+    let changed = dispatch::reductions_first(changed, last_written);
 
     let channels = device_channels.read().await;
     let trust = device_trust.read().await;

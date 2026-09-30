@@ -131,22 +131,41 @@ fn a_zero_band_envelope_rides_load_steps_without_ringing() {
     }
 }
 
-#[test]
-fn a_direct_operator_write_inside_the_envelope_is_left_alone() {
-    // Arrange — the operator's 50 kW went straight to the racks; the
-    // controller has never written. 72.8 kW load, POI still imports 22.8 kW.
-    let mut ctrl = EnvelopeController::new(config(), 0.0);
-    // Act
-    let out = ctrl.tick(EnvelopeTick {
+/// One tick at zero export with a POI meter, 4 MW rating.
+fn poi_tick(active_power: f64, requested: f64, p_poi: f64) -> EnvelopeTick {
+    EnvelopeTick {
         import_limit: Some(5_378_000.0),
         export_limit: Some(0.0),
-        active_power: 50_000.0,
-        requested_setpoint: 50_000.0,
-        poi_active_power: Some(22_800.0),
+        active_power,
+        requested_setpoint: requested,
+        poi_active_power: Some(p_poi),
         power_min: -POWER_MAX,
         power_max: POWER_MAX,
         dt: Duration::from_secs(1),
-    });
+    }
+}
+
+#[test]
+fn a_stale_battery_reading_does_not_raise_the_ceiling() {
+    // Arrange — the demo's floor boundary: the controller holds 1.107 MW,
+    // but the module's summed reading still counts a rack that just left
+    // (1.65 MW). The POI, 0.4 s behind, already shows 12.8 kW of import.
+    let mut ctrl = EnvelopeController::new(config(), 1_107_000.0);
+    // Act — the event asks for more than the load
+    let out = ctrl.tick(poi_tick(1_650_000.0, REQUESTED_W, 12_800.0));
+    // Assert — steps from what was commanded, not the stale reading
+    assert_eq!(out, Some(1_107_000.0 + 0.1 * 12_800.0));
+}
+
+#[test]
+fn a_direct_operator_write_inside_the_envelope_is_left_alone() {
+    // Arrange — controller seeded at 0 kW; then the operator's 50 kW goes
+    // straight to the racks (handle_command writes directly). 72.8 kW load.
+    let mut ctrl = EnvelopeController::new(config(), 0.0);
+    ctrl.tick(poi_tick(0.0, 0.0, 72_800.0));
+    // Act — next tick sees the new request and the racks at 50 kW
+    let out = ctrl.tick(poi_tick(50_000.0, 50_000.0, 22_800.0));
     // Assert — not pulled back toward the controller's own 0
-    assert_eq!(out, Some(50_000.0));
+    assert_eq!(out, None);
+    assert_eq!(ctrl.current_output(), 50_000.0);
 }

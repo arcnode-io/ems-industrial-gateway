@@ -28,7 +28,7 @@ mod allocation_test;
 mod distribute;
 mod topic;
 
-pub(crate) use distribute::{compute_shares, write_shares};
+pub(crate) use distribute::{compute_shares, reductions_first, write_shares};
 pub use topic::{CommandTopic, parse_command_topic};
 
 use crate::asyncapi::trust::DeviceTrust;
