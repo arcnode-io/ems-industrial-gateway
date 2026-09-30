@@ -35,10 +35,12 @@ const UNIT: &str = "amps";
 const SECURITY_NAME: &str = "gateway";
 const AUTH_PASS: &str = "authpass1234";
 const PRIV_PASS: &str = "privpass5678";
-/// Simulator OID for input_current — matches the agent's `OID_INPUT_CURRENT`.
-const TARGET_OID: &str = "1.3.6.1.4.1.1718.4.1.3.3.1.7";
-/// Simulator sawtooth range — values fluctuate within `[100, 200]`.
-const VALUE_RANGE: std::ops::RangeInclusive<f64> = 100.0..=200.0;
+/// Sentry4-MIB st4LineCurrent L1 — matches the agent's `OID_INPUT_CURRENT`.
+const TARGET_OID: &str = "1.3.6.1.4.1.1718.4.1.4.3.1.3.1.1.1";
+/// st4LineCurrent is in hundredths of an amp (pdu template scale).
+const SCALE: f64 = 0.01;
+/// The agent drifts raw 1500-1600, i.e. 15.00-16.00 A once scaled.
+const VALUE_RANGE: std::ops::RangeInclusive<f64> = 15.0..=16.0;
 const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[tokio::test]
@@ -73,6 +75,7 @@ async fn gateway_polls_snmpv3_usm_agent_and_publishes_to_mqtt() -> Result<()> {
                     "host": agent_host.to_string(),
                     "port": agent_port,
                     "oid": TARGET_OID,
+                    "scale": SCALE,
                 }
             }
         },
