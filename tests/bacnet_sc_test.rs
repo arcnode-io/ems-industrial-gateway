@@ -63,11 +63,13 @@ async fn gateway_reads_present_value_from_bacnet_sc_device() {
             max_npdu_length: 1476,
         },
     };
-    let device_handle = tokio::spawn(run_fake_device(device_cfg));
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    let device_handle = tokio::spawn(run_fake_device(device_cfg, connected_tx));
 
-    // Give the device a moment to register in the hub's directory
-    // before the gateway connects + addresses it by VMAC.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Reason: the hub silently drops a unicast to a VMAC not yet in its
+    // directory, so the gateway must not address the device before it has
+    // connected. A fixed sleep raced under suite load.
+    connected_rx.await.expect("fake device never connected");
 
     // Build the binding + creds the gateway sees.
     let binding = BacnetScBinding {
@@ -98,10 +100,12 @@ async fn gateway_reads_present_value_from_bacnet_sc_device() {
     device_handle.abort();
 }
 
-/// Fake BACnet device: connects to the hub, then on first inbound NPDU,
+/// Fake BACnet device: connects to the hub and signals `connected`, then on
+/// first inbound NPDU,
 /// decodes the ReadProperty request and replies with Real(42.5).
-async fn run_fake_device(cfg: BacnetScConfig) {
+async fn run_fake_device(cfg: BacnetScConfig, connected: tokio::sync::oneshot::Sender<()>) {
     let mut dl = BacnetScDataLink::connect(cfg).await.unwrap();
+    connected.send(()).unwrap();
     let (npdu_bytes, source) = dl.recv_npdu().await.unwrap();
     let (_npdu, npdu_len) = Npdu::decode(&npdu_bytes).unwrap();
     let apdu = Apdu::decode(&npdu_bytes[npdu_len..]).unwrap();
