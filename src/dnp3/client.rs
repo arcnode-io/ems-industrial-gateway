@@ -57,7 +57,7 @@ pub async fn read_measurement(
             _ => try_read_plain(&endpoint, b.point_index).await,
         };
         match outcome {
-            Ok(v) => return Ok(v),
+            Ok(v) => return Ok(scaled(v, b)),
             Err(e) => {
                 warn!(attempt, error = %e, "dnp3 read failed; retrying");
                 last_err = Some(e);
@@ -180,3 +180,8 @@ impl AssociationHandler for NopAssocHandler {}
 /// AssociationInformation — defaults are fine.
 struct NopAssocInfo;
 impl AssociationInformation for NopAssocInfo {}
+
+/// Raw point value to the measurement's unit (e.g. kV primary to volts).
+pub(super) fn scaled(raw: f64, b: &Dnp3TcpBinding) -> f64 {
+    raw * b.scale
+}

@@ -47,6 +47,7 @@ async fn repeated_reads_reuse_one_connection() {
         port,
         uri: "/Chassis/1/Power".to_string(),
         json_pointer: Some("/v".to_string()),
+        scale: 1.0,
     };
     // Act — five polls, as one poll task would make over five ticks
     for _ in 0..5 {
@@ -54,4 +55,29 @@ async fn repeated_reads_reuse_one_connection() {
     }
     // Assert
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn scale_converts_the_raw_reading_to_the_declared_unit() {
+    // Arrange — NVIDIA's OperatingSpeedMHz is MHz; the measurement is hertz
+    let (port, _) = keep_alive_server().await;
+    let binding: RedfishBinding = serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": port, "uri": "/Systems/1/Processors/GPU_0",
+        "json_pointer": "/v", "scale": 1_000_000.0,
+    }))
+    .unwrap();
+    // Act
+    let hz = read_measurement(&binding, None, None).await.unwrap();
+    // Assert
+    assert_eq!(hz, 1_000_000.0);
+}
+
+#[test]
+fn absent_scale_is_one() {
+    // Specs from before the field existed must read exactly as before.
+    let binding: RedfishBinding = serde_json::from_value(serde_json::json!({
+        "host": "bmc", "port": 443, "uri": "/Chassis/1/Power", "json_pointer": null,
+    }))
+    .unwrap();
+    assert_eq!(binding.scale, 1.0);
 }

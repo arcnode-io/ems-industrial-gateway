@@ -11,11 +11,12 @@
 
 mod bindings;
 mod source_map;
+mod virtual_bindings;
 
 pub use bindings::{
-    BacnetIpBinding, BacnetScBinding, ChildAllocation, DistributeBinding, Dnp3TcpBinding,
-    ModbusTcpBinding, RedfishBinding, SnmpBinding, SyntheticBinding, WeightedPair,
+    BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding, SnmpBinding,
 };
+pub use virtual_bindings::{ChildAllocation, DistributeBinding, SyntheticBinding, WeightedPair};
 
 use crate::asyncapi::trust::DeviceTrust;
 use serde::Deserialize;

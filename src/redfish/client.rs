@@ -41,9 +41,10 @@ pub async fn read_measurement(
             .with_context(|| format!("json pointer {ptr} missed in response from {url}"))?,
         None => &body,
     };
-    value
+    let raw = value
         .as_f64()
-        .with_context(|| format!("expected numeric Redfish value at {url}, got {value:?}"))
+        .with_context(|| format!("expected numeric Redfish value at {url}, got {value:?}"))?;
+    Ok(raw * b.scale)
 }
 
 /// Process-wide plain HTTP client.
