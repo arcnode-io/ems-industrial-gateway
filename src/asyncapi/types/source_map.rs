@@ -9,10 +9,12 @@
 //!   must write (FC6/FC16, FC6 only for one-register types) and can't carry
 //!   a SunSpec scale factor, which only reads apply. A bad template on one
 //!   device mustn't take every other device offline.
+//! - Unread DNP3 point type: measurements read analog or binary inputs only.
 //!
 //! Anything else that doesn't parse is still a real error.
 
 use super::{CommandSource, ProtocolBinding, ProtocolSource};
+use crate::dnp3::master::point_kind;
 use crate::modbus::codec::{read_function, write_function};
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, Deserializer, Error as _};
@@ -32,6 +34,7 @@ pub fn measurements<'de, D: Deserializer<'de>>(
 ) -> Result<SourceMap<ProtocolSource>, D::Error> {
     parse(d, |s: &ProtocolSource| match &s.binding {
         ProtocolBinding::ModbusTcp(m) => read_function(m.function_code).map(drop),
+        ProtocolBinding::Dnp3Tcp(d) => point_kind(&d.point_type).map(drop),
         _ => Ok(()),
     })
 }

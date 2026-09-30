@@ -5,6 +5,8 @@
 #[allow(dead_code)]
 pub mod containers;
 #[allow(dead_code)]
+pub mod dnp3_relay;
+#[allow(dead_code)]
 pub mod dnp3_security;
 #[allow(dead_code)]
 pub mod modbus_security;

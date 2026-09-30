@@ -128,3 +128,18 @@ fn a_command_with_a_sunspec_scale_factor_is_skipped() {
     let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
     assert!(!parsed.x_command_source.contains_key("inverter"));
 }
+
+#[test]
+fn a_dnp3_measurement_with_an_unread_point_type_is_skipped() {
+    // Counters and outputs aren't read; better skipped at parse than failing every poll
+    let entry = json!({
+        "unit": "none", "poll_rate_hz": 1, "protocol": "dnp3_tcp",
+        "host": "10.0.0.20", "port": 20000, "point_index": 3, "point_type": "counter",
+    });
+    let spec = json!({
+        "info": { "version": "v1" },
+        "x-protocol-source": { "relay": { "trip_count": entry } },
+    });
+    let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
+    assert!(!parsed.x_protocol_source.contains_key("relay"));
+}

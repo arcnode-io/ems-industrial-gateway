@@ -93,7 +93,7 @@ pub async fn spawn(pki: &TestPki) -> Result<Dnp3SecurityFixture> {
 /// Outstation config — single master at addr 1, this outstation at 1024.
 /// Mirrors `mock-dnp3-outstation` so the gateway client's master addr stays
 /// consistent across plain + TLS e2e tests.
-fn outstation_config() -> OutstationConfig {
+pub fn outstation_config() -> OutstationConfig {
     OutstationConfig::new(
         EndpointAddress::try_new(1024).expect("outstation addr"),
         EndpointAddress::try_new(1).expect("master addr"),
@@ -102,16 +102,16 @@ fn outstation_config() -> OutstationConfig {
 }
 
 /// Minimal OutstationApplication — defaults fine for read-only use.
-struct App;
+pub struct App;
 impl OutstationApplication for App {}
 
 /// No-op OutstationInformation.
-struct Info;
+pub struct Info;
 impl OutstationInformation for Info {}
 
 /// No-op ControlHandler. Tier 1 is read-only; every select/operate returns
 /// NotSupported.
-struct Ctl;
+pub struct Ctl;
 impl ControlHandler for Ctl {}
 
 macro_rules! reject_control {
@@ -145,7 +145,7 @@ reject_control!(Group41Var3);
 reject_control!(Group41Var4);
 
 /// No-op connection-state listener.
-struct NopListener;
+pub struct NopListener;
 impl Listener<ConnectionState> for NopListener {
     fn update(&mut self, _state: ConnectionState) -> MaybeAsync<()> {
         MaybeAsync::ready(())
