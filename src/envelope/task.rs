@@ -107,6 +107,9 @@ pub fn spawn(
         // module-level target is unchanged still write only the children
         // whose own SoC-weighted share drifted, and skip the rest.
         let mut last_written: HashMap<String, f64> = HashMap::new();
+        // Whether last tick held back a growing share (see
+        // `dispatch::handoff_batch`).
+        let mut deferred_growth = false;
         let mut last_tick = Instant::now();
         loop {
             tokio::select! {
@@ -119,6 +122,7 @@ pub fn spawn(
                         &cfg,
                         &mut controller,
                         &mut last_written,
+                        &mut deferred_growth,
                         dt,
                         &site_id,
                         &cache,
@@ -145,6 +149,7 @@ async fn tick_once(
     cfg: &EnvelopeTaskConfig,
     controller: &mut Option<EnvelopeController>,
     last_written: &mut HashMap<String, f64>,
+    deferred_growth: &mut bool,
     dt: Duration,
     site_id: &str,
     cache: &InputCache,
@@ -226,7 +231,9 @@ async fn tick_once(
     if changed.is_empty() {
         return;
     }
-    let changed = dispatch::reductions_first(changed, last_written);
+    let ordered = dispatch::reductions_first(changed, last_written);
+    let (changed, deferred) = dispatch::handoff_batch(ordered, last_written, *deferred_growth);
+    *deferred_growth = deferred;
 
     let channels = device_channels.read().await;
     let trust = device_trust.read().await;

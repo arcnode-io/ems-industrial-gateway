@@ -1,6 +1,6 @@
 //! e2e: a lagging POI meter must not make the envelope ring. The meter's
 //! reading trails the battery's by 1–3 s; a law that feeds on its own lag
-//! exported half the site load on the demo. Closed loop here: the test plays
+//! rings into export. Closed loop here: the test plays
 //! the meter, reading the racks and reporting the POI 2 s late.
 
 mod fixtures;

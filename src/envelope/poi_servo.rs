@@ -3,7 +3,7 @@
 //!
 //! Reason: the POI meter reads the battery's own steps 1–3 s late. Any law
 //! that computes load as `P_poi + P_bess` and clamps to it counts each step
-//! twice and feeds on its own lag. That rang into export on the demo. Here
+//! twice and feeds on its own lag, ringing into export. Here
 //! the bounds are the commanded output nudged by a fraction of the measured
 //! POI headroom per second, which is an integrator: slow enough, it can't
 //! overshoot through the lag. It steps from what was commanded, never from

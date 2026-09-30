@@ -1,14 +1,14 @@
 //! Closed-loop check of the POI envelope against a lagging meter. High-risk:
-//! the demo rehearsal exported half the site load (POI −553 kW under a
-//! zero-export envelope) for 1–3 s whenever the battery ramped, which on real
-//! hardware is a reverse-power trip. The meter reads the battery's step ~2 s
-//! late; the law must not feed on its own lag.
+//! a law that feeds on the meter's lag exports a large share of site load
+//! under a zero-export envelope for seconds whenever the battery ramps, which
+//! on real hardware is a reverse-power trip. The meter reads the battery's
+//! step ~2 s late here.
 
 use super::control_law::{EnvelopeConfig, EnvelopeController, EnvelopeTick};
 use std::collections::VecDeque;
 use std::time::Duration;
 
-/// The rehearsal's site load.
+/// Site load.
 const LOAD_W: f64 = 1_120_000.0;
 /// Requested discharge, well past the load, so zero-export binds.
 const REQUESTED_W: f64 = 1_200_000.0;
@@ -147,7 +147,7 @@ fn poi_tick(active_power: f64, requested: f64, p_poi: f64) -> EnvelopeTick {
 
 #[test]
 fn a_stale_battery_reading_does_not_raise_the_ceiling() {
-    // Arrange — the demo's floor boundary: the controller holds 1.107 MW,
+    // Arrange — a reserve-floor handoff: the controller holds 1.107 MW,
     // but the module's summed reading still counts a rack that just left
     // (1.65 MW). The POI, 0.4 s behind, already shows 12.8 kW of import.
     let mut ctrl = EnvelopeController::new(config(), 1_107_000.0);

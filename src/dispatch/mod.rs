@@ -27,9 +27,13 @@ pub mod allocation;
 mod allocation_test;
 mod distribute;
 mod topic;
+mod write_order;
+#[cfg(test)]
+mod write_order_test;
 
-pub(crate) use distribute::{compute_shares, reductions_first, write_shares};
+pub(crate) use distribute::{compute_shares, write_shares};
 pub use topic::{CommandTopic, parse_command_topic};
+pub(crate) use write_order::{handoff_batch, reductions_first};
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
