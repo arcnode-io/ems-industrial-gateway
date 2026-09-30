@@ -114,3 +114,17 @@ fn an_fc6_command_on_a_multi_register_type_is_skipped() {
     let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
     assert!(!parsed.x_command_source.contains_key("cooler"));
 }
+
+#[test]
+fn a_command_with_a_sunspec_scale_factor_is_skipped() {
+    // Writes don't apply sunssf; writing one unscaled would be off by 10^sf
+    let mut command = fc_command(16, "int16");
+    command["scale_factor_address"] = json!(40085);
+    let spec = json!({
+        "info": { "version": "v1" },
+        "x-protocol-source": {},
+        "x-command-source": { "inverter": { "set_active_power": command } },
+    });
+    let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
+    assert!(!parsed.x_command_source.contains_key("inverter"));
+}

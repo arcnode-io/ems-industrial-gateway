@@ -9,6 +9,7 @@ use crate::config::GatewayCredentials;
 use crate::modbus::codec::{
     ReadFunction, WriteFunction, decode_raw, encode_raw, read_function, write_function,
 };
+use crate::modbus::sunspec::apply_sunssf;
 use crate::modbus::transport::{read_registers, tcp_channel, tls_channel, write_registers};
 use anyhow::{Context, Result};
 use rodbus::client::Channel;
@@ -19,8 +20,8 @@ pub use crate::modbus::codec::{
 
 /// Full read pipeline for a Modbus measurement: connect → read
 /// `data_type.register_count()` registers with the binding's function code
-/// (FC3 holding, FC4 input) → decode per data type + word order → apply
-/// scale/offset.
+/// (FC3 holding, FC4 input) → decode per data type + word order → apply the
+/// SunSpec scale factor if the binding names one → apply scale/offset.
 ///
 /// `trust` carries the device's `x-device-trust` block. `creds` is the
 /// gateway's global mTLS material. `Some(TlsMutual{..})` + `Some(creds)`
@@ -36,16 +37,16 @@ pub async fn read_measurement(
     creds: Option<&GatewayCredentials>,
 ) -> Result<f64> {
     let function = read_function(b.function_code).map_err(anyhow::Error::msg)?;
-    let channel = channel(b, trust, creds)?;
-    let words = read_registers(
-        channel,
-        unit_id(b)?,
-        b.address,
-        b.data_type.register_count(),
-        function,
-    )
-    .await?;
-    let raw = decode_raw(&words, b.data_type, b.word_order);
+    let mut channel = channel(b, trust, creds)?;
+    let unit_id = unit_id(b)?;
+    let count = b.data_type.register_count();
+    let words = read_registers(&mut channel, unit_id, b.address, count, function).await?;
+    let mut raw = decode_raw(&words, b.data_type, b.word_order);
+    // SunSpec: the exponent lives in its own register, read on the same session.
+    if let Some(sf_address) = b.scale_factor_address {
+        let sf = read_registers(&mut channel, unit_id, sf_address, 1, function).await?;
+        raw = apply_sunssf(raw, sf[0]).map_err(anyhow::Error::msg)?;
+    }
     Ok(apply_scale_offset(raw, b.scale, b.offset))
 }
 
@@ -74,14 +75,8 @@ pub async fn read_holding(
     addr: u16,
     count: u16,
 ) -> Result<Vec<u16>> {
-    read_registers(
-        tcp_channel(host, port),
-        unit_id,
-        addr,
-        count,
-        ReadFunction::Holding,
-    )
-    .await
+    let mut channel = tcp_channel(host, port);
+    read_registers(&mut channel, unit_id, addr, count, ReadFunction::Holding).await
 }
 
 /// Plain TCP write of `words` at `addr` (FC16, write multiple registers).

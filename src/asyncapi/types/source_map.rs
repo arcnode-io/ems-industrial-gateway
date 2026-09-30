@@ -5,9 +5,10 @@
 //!   `PROVISIONED_AT_COMMISSIONING` sentinel, which device-api passes through
 //!   as-is. Devices come online one commissioning POST at a time, so it's
 //!   picked up on the reconcile after its address lands.
-//! - Unusable Modbus function code: a measurement must read (FC3/FC4), a
-//!   command must write (FC6/FC16, FC6 only for one-register types). A bad
-//!   template on one device mustn't take every other device offline.
+//! - Unusable Modbus binding: a measurement must read (FC3/FC4), a command
+//!   must write (FC6/FC16, FC6 only for one-register types) and can't carry
+//!   a SunSpec scale factor, which only reads apply. A bad template on one
+//!   device mustn't take every other device offline.
 //!
 //! Anything else that doesn't parse is still a real error.
 
@@ -38,6 +39,9 @@ pub fn measurements<'de, D: Deserializer<'de>>(
 /// `x-command-source` with unprovisioned or unwritable devices dropped.
 pub fn commands<'de, D: Deserializer<'de>>(d: D) -> Result<SourceMap<CommandSource>, D::Error> {
     parse(d, |s: &CommandSource| match &s.binding {
+        ProtocolBinding::ModbusTcp(m) if m.scale_factor_address.is_some() => {
+            Err("scale_factor_address (SunSpec sunssf) is only applied on reads".to_string())
+        }
         ProtocolBinding::ModbusTcp(m) => write_function(m.function_code, m.data_type).map(drop),
         _ => Ok(()),
     })

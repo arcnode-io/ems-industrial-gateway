@@ -34,6 +34,11 @@ pub struct ModbusTcpBinding {
     /// the old FC3 read / FC16 write. Checked per entry at spec parse.
     #[serde(default)]
     pub function_code: Option<u8>,
+    /// SunSpec `sunssf`: the register holding this value's decimal exponent
+    /// (int16), read every poll: value = raw × 10^sf, before scale/offset.
+    /// Measurements only; a command carrying one is skipped at spec parse.
+    #[serde(default)]
+    pub scale_factor_address: Option<u16>,
 }
 
 /// SNMP v2c binding fields.

@@ -58,7 +58,7 @@ pub fn tls_channel(
 
 /// Read `count` registers at `addr` with FC3 (holding) or FC4 (input).
 pub async fn read_registers(
-    mut channel: Channel,
+    channel: &mut Channel,
     unit_id: u8,
     addr: u16,
     count: u16,

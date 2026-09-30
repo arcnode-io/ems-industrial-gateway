@@ -56,6 +56,7 @@ async fn known_device_channels() -> Result<(
         data_type: ModbusDataType::Int32,
         word_order: WordOrder::HighLow,
         function_code: None,
+        scale_factor_address: None,
     });
     let mut commands = HashMap::new();
     commands.insert("set_active_power".to_string(), binding);

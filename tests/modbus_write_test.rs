@@ -31,6 +31,7 @@ async fn write_setpoint_lands_the_exact_value_on_the_wire() -> Result<()> {
         data_type: ModbusDataType::Int32,
         word_order: WordOrder::HighLow,
         function_code: None,
+        scale_factor_address: None,
     };
 
     // Act — write a setpoint through the same path dispatch::handle_command uses.
@@ -60,6 +61,7 @@ async fn write_is_rejected_when_server_not_in_writable_mode() -> Result<()> {
         data_type: ModbusDataType::Int32,
         word_order: WordOrder::HighLow,
         function_code: None,
+        scale_factor_address: None,
     };
 
     // Act + Assert — the default mock still rejects writes (IllegalFunction).

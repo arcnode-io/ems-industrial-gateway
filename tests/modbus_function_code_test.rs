@@ -73,6 +73,7 @@ fn binding(addr: SocketAddr, function_code: u8) -> ModbusTcpBinding {
         data_type: ModbusDataType::Uint16,
         word_order: WordOrder::HighLow,
         function_code: Some(function_code),
+        scale_factor_address: None,
     }
 }
 
