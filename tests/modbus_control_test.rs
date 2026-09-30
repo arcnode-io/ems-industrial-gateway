@@ -6,14 +6,14 @@
 //! asserts the EXACT commanded value lands on MQTT — no sawtooth-range
 //! fuzziness — and that it survives fixture sim ticks (driven-skip).
 //!
-//! Requires the post-control-surface mock image (fixtures f77bf48+).
+//! Requires the mock image with the ION9000 poi_meter map (fixtures 91ead8c+).
 
 mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
 use fixtures::containers::{start_hivemq, start_mock_modbus_server};
-use fixtures::spec_stub::{build_spec_body_plain, modbus_tls_binding, spawn_asyncapi_stub};
+use fixtures::spec_stub::{build_spec_body_plain, spawn_asyncapi_stub};
 use futures::StreamExt;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
 use serde_json::{Value, json};
@@ -35,13 +35,14 @@ fn init_tracing() {
 const SITE_ID: &str = "site_001";
 /// Device id in the spec + MQTT topic.
 const DEVICE_ID: &str = "meter_01";
-/// Measurement name (int32 at holding 4000-4001, scale 1.0).
+/// Measurement name (ION9000 kwh_delivered: int64 at holding 3204-3207).
 const MEASUREMENT: &str = "kwh_delivered";
 /// Engineering unit terminal topic segment.
 const UNIT: &str = "watt_hours";
 /// Bound on how long we wait for published samples.
 const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
-/// Driven value: 2_345_678 = 0x0023CACE -> high 0x0023 (35), low 0xCACE (51918).
+/// Driven value: 2_345_678 = 0x0000_0000_0023_CACE, so only the low words
+/// move: 3206 = 0x0023 (35), 3207 = 0xCACE (51918).
 const DRIVEN_VALUE: f64 = 2_345_678.0;
 
 #[tokio::test]
@@ -61,7 +62,7 @@ async fn control_driven_register_publishes_exact_engineering_value() -> Result<(
         DEVICE_ID,
         MEASUREMENT,
         UNIT,
-        modbus_tls_binding(modbus_addr),
+        kwh_delivered_binding(modbus_addr),
     );
     let stub = spawn_asyncapi_stub(body).await;
 
@@ -109,7 +110,7 @@ async fn control_driven_register_publishes_exact_engineering_value() -> Result<(
     let control = format!("http://127.0.0.1:{control_port}/registers");
     let put = reqwest::Client::new()
         .put(&control)
-        .json(&json!({"registers": {"4000": 35, "4001": 51918}}))
+        .json(&json!({"registers": {"3206": 35, "3207": 51918}}))
         .send()
         .await?;
     assert_eq!(put.status(), 204);
@@ -157,4 +158,21 @@ async fn next_value(
         }
     })
     .await?
+}
+
+/// The poi_meter template's kwh_delivered binding (ION9000 map), pointed at
+/// the mock meter.
+fn kwh_delivered_binding(addr: SocketAddr) -> Value {
+    json!({
+        "protocol": "modbus_tcp",
+        "host": addr.ip().to_string(),
+        "port": addr.port(),
+        "unit_id": "1",
+        "function_code": 3,
+        "address": 3204,
+        "data_type": "int64",
+        "word_order": "high_low",
+        "scale": 1.0,
+        "offset": 0.0,
+    })
 }
