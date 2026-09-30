@@ -206,3 +206,28 @@ fn a_held_approach_does_not_raise_but_still_cuts() {
     assert_eq!(raise, None);
     assert!(cut.is_some_and(|v| v < 1_120_000.0), "cut: {cut:?}");
 }
+
+#[test]
+fn parked_racks_do_not_wind_up_the_command() {
+    // Arrange — a retained zero-import limit while both racks are parked at
+    // their reserve floor: nothing is deliverable, so the POI shows the full
+    // load as an import violation every tick. Then the racks are released.
+    // Distribution caps delivery at what eligible racks can take; the task
+    // syncs the controller to it.
+    let mut ctrl = EnvelopeController::new(config(), 0.0);
+    let zero_import = |d: f64| EnvelopeTick {
+        import_limit: Some(0.0),
+        ..poi_tick(d, REQUESTED_W, LOAD_W - d)
+    };
+    let mut delivered = 0.0;
+    let mut peak = 0.0_f64;
+    for n in 0..120 {
+        let capacity = if n < 60 { 0.0 } else { POWER_MAX };
+        ctrl.tick(zero_import(delivered));
+        delivered = ctrl.current_output().min(capacity);
+        ctrl.sync_to_delivered(delivered);
+        peak = peak.max(delivered);
+    }
+    // Assert — after release it approaches the load, never jumps past it
+    assert!(peak <= LOAD_W + 1_000.0, "peak command {peak:.0} W");
+}

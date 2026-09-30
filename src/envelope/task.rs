@@ -160,6 +160,14 @@ async fn tick_once(
         Ok(s) => s,
         Err(_) => return, // hold — same posture as missing cache inputs above
     };
+    // Children at their floor or offline can't take their share; the
+    // controller must not keep commanding what can't be delivered.
+    let delivered: f64 = shares.iter().map(|(_, share)| share).sum();
+    if let Some(ctrl) = controller.as_mut()
+        && (delivered - target).abs() > 1.0
+    {
+        ctrl.sync_to_delivered(delivered);
+    }
     let Some(plan) = writes.plan(shares) else {
         return;
     };
