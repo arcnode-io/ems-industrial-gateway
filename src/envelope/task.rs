@@ -9,10 +9,12 @@
 //! never look like a new real operator request.
 
 use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
+use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
-use crate::envelope::control_law::{EnvelopeConfig, EnvelopeController, EnvelopeTick};
+use crate::envelope::config::EnvelopeTaskConfig;
+use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
+use crate::envelope::writes::WriteState;
 use crate::synthetic::InputCache;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,66 +23,6 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
-
-/// Resolved envelope-guard config for one `distribute` binding — `Some`
-/// only when every guard field is present; a plain (non-guarded) distribute
-/// binding has none of them. Topic fields are the raw (still-templated)
-/// wire values; the caller substitutes `{site_id}` when building
-/// `EnvelopeTaskConfig`, same as `app.rs` already does for synthetic inputs.
-pub struct EnvelopeGuardConfig {
-    /// `EnvelopeController`'s ramp/hysteresis parameters.
-    pub control: EnvelopeConfig,
-    /// The module's own static lower bound (`active_power.bounds.min`).
-    pub power_min: f64,
-    /// The module's own static upper bound (`active_power.bounds.max`).
-    pub power_max: f64,
-    /// MQTT topic template carrying the live `import_limit`.
-    pub import_limit_topic: String,
-    /// MQTT topic template carrying the live `export_limit`.
-    pub export_limit_topic: String,
-    /// MQTT topic template carrying the module's own live `active_power`.
-    pub active_power_topic: String,
-    /// MQTT topic template carrying the POI meter's `active_power`; `None`
-    /// means no POI meter, so site load is taken as 0.
-    pub poi_active_power_topic: Option<String>,
-}
-
-/// Extract envelope-guard config from a `distribute` binding. `None` if any
-/// guard field is missing — the binding is a plain, unguarded distribute.
-pub fn envelope_guard_config(d: &DistributeBinding) -> Option<EnvelopeGuardConfig> {
-    Some(EnvelopeGuardConfig {
-        control: EnvelopeConfig {
-            ramp_rate_per_sec: d.ramp_rate_per_sec?,
-            hysteresis_margin: d.hysteresis_margin?,
-            hysteresis_dwell: Duration::from_secs_f64(d.hysteresis_dwell_secs?),
-        },
-        power_min: d.power_min?,
-        power_max: d.power_max?,
-        import_limit_topic: d.import_limit_topic.clone()?,
-        export_limit_topic: d.export_limit_topic.clone()?,
-        active_power_topic: d.active_power_topic.clone()?,
-        poi_active_power_topic: d.poi_active_power_topic.clone(),
-    })
-}
-
-/// Everything one rebalance/envelope task needs to run forever.
-pub struct EnvelopeTaskConfig {
-    /// The device (module, or a future site-level virtual parent) this task
-    /// distributes for.
-    pub device_id: String,
-    /// `{verb}_{target}` key into `device_channels`/`last_requested`.
-    pub channel_key: String,
-    /// `Some` for an envelope-guarded distribute (headroom clamp applies);
-    /// `None` for a plain distribute — every tick still rebalances the
-    /// child split, just with no clamp on top.
-    pub guard: Option<EnvelopeGuardConfig>,
-    /// The distribute binding this task rebalances. Must be
-    /// `ProtocolBinding::Distribute` — the only kind of binding this task
-    /// is ever spawned for.
-    pub binding: ProtocolBinding,
-    /// Tick cadence — matches the module's `active_power` poll rate (1 Hz).
-    pub tick_hz: f64,
-}
 
 /// Spawn the per-module envelope loop. Mirrors `synthetic::task::spawn`'s
 /// shutdown contract: the returned `JoinHandle` exits when `cancel` fires.
@@ -103,13 +45,7 @@ pub fn spawn(
         // assumed 0. The initial requested_setpoint (before any real
         // command) is 0.0.
         let mut controller: Option<EnvelopeController> = None;
-        // Last share actually written per child — lets a tick where the
-        // module-level target is unchanged still write only the children
-        // whose own SoC-weighted share drifted, and skip the rest.
-        let mut last_written: HashMap<String, f64> = HashMap::new();
-        // Whether last tick held back a growing share (see
-        // `dispatch::handoff_batch`).
-        let mut deferred_growth = false;
+        let mut writes = WriteState::default();
         let mut last_tick = Instant::now();
         loop {
             tokio::select! {
@@ -121,8 +57,7 @@ pub fn spawn(
                     tick_once(
                         &cfg,
                         &mut controller,
-                        &mut last_written,
-                        &mut deferred_growth,
+                        &mut writes,
                         dt,
                         &site_id,
                         &cache,
@@ -148,8 +83,7 @@ pub fn spawn(
 async fn tick_once(
     cfg: &EnvelopeTaskConfig,
     controller: &mut Option<EnvelopeController>,
-    last_written: &mut HashMap<String, f64>,
-    deferred_growth: &mut bool,
+    writes: &mut WriteState,
     dt: Duration,
     site_id: &str,
     cache: &InputCache,
@@ -178,10 +112,10 @@ async fn tick_once(
             let poi_active_power = match &guard.poi_active_power_topic {
                 Some(topic) => {
                     let topic = topic.replace("{site_id}", site_id);
-                    let Some(p_poi) = cache.get(&topic).map(|e| e.0) else {
+                    let Some((p_poi, received_at)) = cache.get(&topic).map(|e| *e) else {
                         return; // hold — no POI reading cached yet
                     };
-                    Some(p_poi)
+                    Some((p_poi, received_at))
                 }
                 None => None,
             };
@@ -189,6 +123,10 @@ async fn tick_once(
             let export_limit_topic = guard.export_limit_topic.replace("{site_id}", site_id);
             let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
             let export_limit = cache.get(&export_limit_topic).map(|e| e.0);
+            let (poi_fresh, hold_approach) = match poi_active_power {
+                Some((_, received_at)) => writes.gate.take(received_at),
+                None => (true, false),
+            };
             // Built here, once every input is present, so its seed is this
             // tick's reading. Reason: building it on a tick that then held
             // seeded it from whatever was cached first, often a stale 0.
@@ -202,7 +140,9 @@ async fn tick_once(
                 export_limit,
                 active_power,
                 requested_setpoint,
-                poi_active_power,
+                poi_active_power: poi_active_power.map(|(p, _)| p),
+                poi_fresh,
+                hold_approach,
                 power_min: guard.power_min,
                 power_max: guard.power_max,
                 dt,
@@ -220,29 +160,14 @@ async fn tick_once(
         Ok(s) => s,
         Err(_) => return, // hold — same posture as missing cache inputs above
     };
-    let changed: Vec<(String, f64)> = shares
-        .into_iter()
-        .filter(|(id, share)| {
-            last_written
-                .get(id)
-                .is_none_or(|prev| (share - prev).abs() >= f64::EPSILON)
-        })
-        .collect();
-    if changed.is_empty() {
+    let Some(plan) = writes.plan(shares) else {
         return;
-    }
-    let ordered = dispatch::reductions_first(changed, last_written);
-    let (changed, deferred) = dispatch::handoff_batch(ordered, last_written, *deferred_growth);
-    *deferred_growth = deferred;
+    };
 
     let channels = device_channels.read().await;
     let trust = device_trust.read().await;
-    match dispatch::write_shares(&changed, &cfg.channel_key, &channels, &trust, creds).await {
-        Ok(()) => {
-            for (id, share) in changed {
-                last_written.insert(id, share);
-            }
-        }
+    match dispatch::write_shares(&plan.writes, &cfg.channel_key, &channels, &trust, creds).await {
+        Ok(()) => writes.landed(plan),
         Err(err) => {
             warn!(
                 device_id = %cfg.device_id,

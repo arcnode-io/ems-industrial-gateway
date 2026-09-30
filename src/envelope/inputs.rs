@@ -34,6 +34,12 @@ pub struct EnvelopeTick {
     /// The POI meter's `active_power` (+ import); `None` when the site has
     /// no POI meter, which is the battery-only law.
     pub poi_active_power: Option<f64>,
+    /// Whether `poi_active_power` is a reading no earlier tick has used. A
+    /// reused reading must not be integrated again.
+    pub poi_fresh: bool,
+    /// Hold movement toward the limit (a share handoff is in flight and its
+    /// deliberate under-delivery would read as headroom). Cuts still apply.
+    pub hold_approach: bool,
     /// Module's own static nameplate lower bound (max charge; negative).
     /// Ramp rate and hysteresis margin on the charge/import side are
     /// fractions of its magnitude.

@@ -7,15 +7,20 @@
 //! `task` for the per-module tick loop + `distribute`-binding wire parsing.
 
 pub mod bounds;
+pub mod config;
 pub mod control_law;
 #[cfg(test)]
 mod control_law_servo_test;
 #[cfg(test)]
 mod control_law_test;
 pub mod inputs;
+pub mod poi_gate;
+#[cfg(test)]
+mod poi_gate_test;
 pub mod poi_servo;
 #[cfg(test)]
 mod poi_servo_test;
 pub mod task;
+pub mod writes;
 
-pub use task::{EnvelopeGuardConfig, EnvelopeTaskConfig, envelope_guard_config};
+pub use config::{EnvelopeGuardConfig, EnvelopeTaskConfig, envelope_guard_config};

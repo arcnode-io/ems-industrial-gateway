@@ -45,6 +45,8 @@ fn simulate(import_limit: Option<f64>, load: impl Fn(usize) -> f64) -> Vec<f64> 
             active_power: battery,
             requested_setpoint: REQUESTED_W,
             poi_active_power: Some(p_poi),
+            poi_fresh: true,
+            hold_approach: false,
             power_min: -POWER_MAX,
             power_max: POWER_MAX,
             dt,
@@ -139,6 +141,8 @@ fn poi_tick(active_power: f64, requested: f64, p_poi: f64) -> EnvelopeTick {
         active_power,
         requested_setpoint: requested,
         poi_active_power: Some(p_poi),
+        poi_fresh: true,
+        hold_approach: false,
         power_min: -POWER_MAX,
         power_max: POWER_MAX,
         dt: Duration::from_secs(1),
@@ -168,4 +172,37 @@ fn a_direct_operator_write_inside_the_envelope_is_left_alone() {
     // Assert — not pulled back toward the controller's own 0
     assert_eq!(out, None);
     assert_eq!(ctrl.current_output(), 50_000.0);
+}
+
+#[test]
+fn a_reused_poi_reading_is_not_integrated_again() {
+    // Arrange — a 1 Hz meter and controller drift in phase, so a tick can
+    // land before the next reading and see the same 551 kW of import twice
+    let mut ctrl = EnvelopeController::new(config(), 1_120_000.0);
+    let reused = EnvelopeTick {
+        poi_fresh: false,
+        ..poi_tick(1_120_000.0, REQUESTED_W, 551_000.0)
+    };
+    // Act
+    let out = ctrl.tick(reused);
+    // Assert — no raise from a reading already acted on
+    assert_eq!(out, None);
+    assert_eq!(ctrl.current_output(), 1_120_000.0);
+}
+
+#[test]
+fn a_held_approach_does_not_raise_but_still_cuts() {
+    // Arrange — mid-handoff: the POI imports because growth was held back
+    // on purpose, which must not read as headroom
+    let mut ctrl = EnvelopeController::new(config(), 1_120_000.0);
+    let held = |p_poi| EnvelopeTick {
+        hold_approach: true,
+        ..poi_tick(1_120_000.0, REQUESTED_W, p_poi)
+    };
+    // Act
+    let raise = ctrl.tick(held(551_000.0));
+    let cut = ctrl.tick(held(-50_000.0));
+    // Assert — no raise; an export violation still backs off right away
+    assert_eq!(raise, None);
+    assert!(cut.is_some_and(|v| v < 1_120_000.0), "cut: {cut:?}");
 }
