@@ -660,6 +660,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             uri: r.uri.clone(),
             json_pointer: r.json_pointer.clone(),
             scale: r.scale,
+            value_map: r.value_map.clone(),
         }),
         ProtocolBinding::Dnp3Tcp(d) => ProtocolBinding::Dnp3Tcp(Dnp3TcpBinding {
             host: d.host.clone(),

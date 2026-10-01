@@ -41,10 +41,18 @@ pub async fn read_measurement(
             .with_context(|| format!("json pointer {ptr} missed in response from {url}"))?,
         None => &body,
     };
-    let raw = value
-        .as_f64()
-        .with_context(|| format!("expected numeric Redfish value at {url}, got {value:?}"))?;
-    Ok(raw * b.scale)
+    match (value, &b.value_map) {
+        (Value::String(text), Some(map)) => map
+            .get(text)
+            .copied()
+            .with_context(|| format!("Redfish value {text:?} at {url} is not in the value_map")),
+        _ => {
+            let raw = value.as_f64().with_context(|| {
+                format!("expected numeric Redfish value at {url}, got {value:?}")
+            })?;
+            Ok(raw * b.scale)
+        }
+    }
 }
 
 /// Process-wide plain HTTP client.

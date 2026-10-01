@@ -12,6 +12,11 @@ use tokio::net::TcpListener;
 /// Minimal HTTP/1.1 keep-alive server: answers every request on a
 /// connection with `{"v": 1.0}` and counts accepted connections.
 async fn keep_alive_server() -> (u16, Arc<AtomicUsize>) {
+    serve(r#"{"v": 1.0}"#).await
+}
+
+/// Same server, answering with `body`.
+async fn serve(body: &'static str) -> (u16, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let accepted = Arc::new(AtomicUsize::new(0));
@@ -22,7 +27,6 @@ async fn keep_alive_server() -> (u16, Arc<AtomicUsize>) {
             counter.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
-                let body = r#"{"v": 1.0}"#;
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
                     body.len()
@@ -48,6 +52,7 @@ async fn repeated_reads_reuse_one_connection() {
         uri: "/Chassis/1/Power".to_string(),
         json_pointer: Some("/v".to_string()),
         scale: 1.0,
+        value_map: None,
     };
     // Act — five polls, as one poll task would make over five ticks
     for _ in 0..5 {
@@ -80,4 +85,47 @@ fn absent_scale_is_one() {
     }))
     .unwrap();
     assert_eq!(binding.scale, 1.0);
+}
+
+fn pump_state(port: u16, value_map: Option<serde_json::Value>) -> RedfishBinding {
+    serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": port, "uri": "/Chassis/CDU/Pumps",
+        "json_pointer": "/Members/0/Status/State", "value_map": value_map,
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_text_reading_maps_to_its_number() {
+    // Arrange — Redfish reports pump state as text
+    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Enabled"}}]}"#).await;
+    let map = serde_json::json!({ "Enabled": 1, "Disabled": 0, "UnavailableOffline": 2 });
+    // Act
+    let state = read_measurement(&pump_state(port, Some(map)), None, None)
+        .await
+        .unwrap();
+    // Assert
+    assert_eq!(state, 1.0);
+}
+
+#[tokio::test]
+async fn a_text_reading_not_in_the_map_is_an_error() {
+    // An unmapped state must not publish as some guessed number
+    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Quiesced"}}]}"#).await;
+    let map = serde_json::json!({ "Enabled": 1 });
+    assert!(
+        read_measurement(&pump_state(port, Some(map)), None, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_text_reading_without_a_map_is_an_error() {
+    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Enabled"}}]}"#).await;
+    assert!(
+        read_measurement(&pump_state(port, None), None, None)
+            .await
+            .is_err()
+    );
 }

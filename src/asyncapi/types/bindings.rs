@@ -2,6 +2,7 @@
 
 use crate::modbus::codec::{ModbusDataType, WordOrder};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// Modbus TCP binding fields (template + device.connection merged in
 /// device-api's `x-protocol-source` extension).
@@ -78,6 +79,11 @@ pub struct RedfishBinding {
     /// for a vendor OEM property in MHz where the unit is hertz). Absent = 1.0.
     #[serde(default = "unit_scale")]
     pub scale: f64,
+    /// Text reading to number, for properties Redfish reports as strings
+    /// (e.g. `Status/State`: `{"Enabled": 1, "Disabled": 0}`). A text reading
+    /// not in the map is a read error, never a guess. Absent = numbers only.
+    #[serde(default)]
+    pub value_map: Option<HashMap<String, f64>>,
 }
 
 /// BACnet/IP (ASHRAE 135 Annex J) binding fields.
