@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rodbus::client::{
     Channel, HostAddr, RequestParam, WriteMultiple, spawn_tcp_client_task, spawn_tls_client_task,
 };
-use rodbus::{AddressRange, Indexed, UnitId};
+use rodbus::{AddressRange, Indexed, RequestError, UnitId};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
@@ -77,6 +77,12 @@ pub async fn read_registers(
         };
         match result {
             Ok(registers) => return Ok(registers.iter().map(|r| r.value).collect()),
+            // Reason: an exception is the device's definite answer (e.g. an
+            // address it doesn't have); asking again only stalls the
+            // device's other readings behind the backoff.
+            Err(e @ RequestError::Exception(_)) => {
+                return Err(e).context(format!("modbus {function:?} read refused"));
+            }
             Err(e) => {
                 warn!(attempt, ?function, error = %e, "modbus read failed; retrying");
                 last_err = Some(e);
@@ -115,6 +121,12 @@ pub async fn write_registers(
         };
         match result {
             Ok(()) => return Ok(()),
+            // Reason: an exception is the device's definite answer (e.g. an
+            // address it doesn't have); asking again only stalls the
+            // device's other readings behind the backoff.
+            Err(e @ RequestError::Exception(_)) => {
+                return Err(e).context(format!("modbus {function:?} write refused"));
+            }
             Err(e) => {
                 warn!(attempt, ?function, error = %e, "modbus write failed; retrying");
                 last_err = Some(e);

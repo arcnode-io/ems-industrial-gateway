@@ -188,8 +188,11 @@ async fn a_curtailment_is_covered_by_battery_while_gpus_stay_at_full_power() -> 
     // Assert — the rack carries the whole ask...
     timeout(Duration::from_secs(20), async {
         loop {
-            let words = read_holding("127.0.0.1", rack_port, 1, 50, 2).await?;
-            if decode_int32(&words, WordOrder::HighLow) == CURTAILMENT_W {
+            // A read error means the rack's setpoint register isn't written
+            // yet (the mock serves it only after the first write): keep waiting.
+            if let Ok(words) = read_holding("127.0.0.1", rack_port, 1, 50, 2).await
+                && decode_int32(&words, WordOrder::HighLow) == CURTAILMENT_W
+            {
                 return anyhow::Ok(());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;

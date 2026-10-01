@@ -52,7 +52,11 @@ async fn watts(port: u16) -> Result<i32> {
 /// Poll both racks until they hold `expected`, or fail after 15 s.
 async fn wait_for(ports: [u16; 2], expected: [i32; 2], what: &str) -> Result<()> {
     timeout(Duration::from_secs(15), async {
-        while [watts(ports[0]).await?, watts(ports[1]).await?] != expected {
+        // A read error means a rack's setpoint register isn't written yet
+        // (the mock serves it only after the first write): keep waiting.
+        while [watts(ports[0]).await.ok(), watts(ports[1]).await.ok()]
+            != [Some(expected[0]), Some(expected[1])]
+        {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         anyhow::Ok(())

@@ -15,6 +15,7 @@ pub mod http;
 pub mod inputs;
 pub mod modbus;
 pub mod mqtt;
+pub mod poller;
 pub mod redfish;
 pub mod snmp;
 pub mod synthetic;

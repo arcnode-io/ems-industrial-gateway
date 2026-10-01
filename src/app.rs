@@ -12,19 +12,14 @@
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding, SyntheticBinding};
-use crate::bacnet::client as bacnet;
-use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::{Config, GatewayCredentials};
 use crate::der_dispatch;
 use crate::dispatch;
-use crate::dnp3::client as dnp3;
 use crate::envelope;
 use crate::http::client::fetch_asyncapi;
 use crate::inputs;
-use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
-use crate::redfish::client as redfish;
-use crate::snmp::client as snmp;
+use crate::poller;
 use crate::synthetic::{self, Computation, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -32,7 +27,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -222,8 +216,8 @@ fn spawn_task_set(
     let mut spawned_synthetic = 0usize;
     let mut spawned_envelope = 0usize;
     for (device_id, channels) in &spec.x_protocol_source {
+        let mut points = Vec::new();
         for (measurement, source) in channels {
-            let task_cancel = parent.child_token();
             let topic = build_topic(&cfg.site_id, device_id, measurement, &source.unit);
             let poll_rate = clamp_poll_rate(source.poll_rate_hz, &topic);
             if let ProtocolBinding::Synthetic(b) = &source.binding {
@@ -234,7 +228,7 @@ fn spawn_task_set(
                     &cfg.site_id,
                     cache.clone(),
                     client.clone(),
-                    task_cancel.clone(),
+                    parent.child_token(),
                 ) {
                     handles.spawn(async move {
                         // The synthetic spawn returns its own JoinHandle; await
@@ -247,29 +241,23 @@ fn spawn_task_set(
                 }
                 continue;
             }
-            let binding = clone_binding(&source.binding);
-            // Reason: trust is per-device (x-device-trust[device_id]); clone
-            // into the task so the spawned future owns it for its full life.
-            let trust = spec.x_device_trust.get(device_id).cloned();
-            // Gateway credentials are global — same Option for every task.
-            let creds = cfg.gateway_credentials.clone();
-            let topic_for_task = topic.clone();
-            let client_for_task = client.clone();
-            handles.spawn(async move {
-                run_task(
-                    binding,
-                    topic_for_task,
-                    poll_rate,
-                    client_for_task,
-                    task_cancel,
-                    trust,
-                    creds,
-                )
-                .await;
+            points.push(poller::Point {
+                topic,
+                binding: clone_binding(&source.binding),
+                period: Duration::from_secs_f64(1.0 / poll_rate),
             });
-            spawned_poll += 1;
-            info!(%device_id, %measurement, %topic, poll_rate, "poll task spawned");
         }
+        if points.is_empty() {
+            continue;
+        }
+        spawned_poll += points.len();
+        info!(%device_id, readings = points.len(), "device poller spawned");
+        // Reason: trust is per-device (x-device-trust[device_id]); clone
+        // into the task so the spawned future owns it for its full life.
+        let trust = spec.x_device_trust.get(device_id).cloned();
+        let creds = cfg.gateway_credentials.clone();
+        let (client, cancel) = (client.clone(), parent.child_token());
+        handles.spawn(poller::run_device(points, client, cancel, trust, creds));
     }
     for (device_id, commands) in &spec.x_command_source {
         for source in commands.values() {
@@ -419,73 +407,6 @@ fn spawn_synthetic(
         tick_hz,
     };
     Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
-}
-
-/// One per-measurement loop. Ticks at `poll_rate_hz`, reads via the protocol
-/// client, publishes the value to MQTT. On read error, logs warn and waits
-/// for the next tick (no double-retry — the protocol client already retries
-/// internally).
-#[allow(clippy::too_many_arguments)]
-async fn run_task(
-    binding: ProtocolBinding,
-    topic: String,
-    poll_rate_hz: f64,
-    client: paho_mqtt::AsyncClient,
-    cancel: CancellationToken,
-    trust: Option<DeviceTrust>,
-    creds: Option<GatewayCredentials>,
-) {
-    let period = Duration::from_secs_f64(1.0 / poll_rate_hz);
-    let mut ticker = interval(period);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = ticker.tick() => {
-                match read_value(&binding, trust.as_ref(), creds.as_ref()).await {
-                    Ok(value) => {
-                        if let Err(e) =
-                            publisher::publish_measurement(&client, &topic, value).await
-                        {
-                            warn!(%topic, error = %e, "publish failed");
-                        }
-                    }
-                    Err(e) => warn!(%topic, error = %e, "read failed; skipping tick"),
-                }
-            }
-        }
-    }
-}
-
-/// Single-point protocol dispatch. Add a `match` arm when a new
-/// `ProtocolBinding` variant lands. `trust` carries the device's
-/// `x-device-trust` block (looked up by device_id at spawn time). `creds`
-/// is the gateway's global mTLS material (CA bundle + cert + key paths).
-async fn read_value(
-    binding: &ProtocolBinding,
-    trust: Option<&DeviceTrust>,
-    creds: Option<&GatewayCredentials>,
-) -> Result<f64> {
-    match binding {
-        ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Snmp(b) => snmp::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Redfish(b) => redfish::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b, trust, creds).await,
-        ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b, trust, creds).await,
-        ProtocolBinding::BacnetSc(b) => bacnet_sc::read_measurement(b, trust, creds).await,
-        // Synthetic channels are driven by `src/synthetic/` (own loop with
-        // MQTT subscriptions + operation evaluation); never reached via the
-        // single-point poll path. Unreachable acts as a tripwire if the
-        // dispatcher upstream forgets to route synthetic channels separately.
-        ProtocolBinding::Synthetic(_) => {
-            unreachable!("synthetic bindings are driven by the synthetic module, not read_value")
-        }
-        // Distribute is command-only — it lives in x-command-source, never
-        // x-protocol-source, so the measurement poll path never sees one.
-        ProtocolBinding::Distribute(_) => {
-            unreachable!("distribute bindings are commands, never a measurement source")
-        }
-    }
 }
 
 /// Build the MQTT topic per ADR-002 §2 measurement address shape.

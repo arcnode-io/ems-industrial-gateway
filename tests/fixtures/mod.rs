@@ -9,6 +9,8 @@ pub mod dnp3_relay;
 #[allow(dead_code)]
 pub mod dnp3_security;
 #[allow(dead_code)]
+pub mod gateway;
+#[allow(dead_code)]
 pub mod modbus_security;
 #[allow(dead_code)]
 pub mod pki;

@@ -19,7 +19,8 @@ use tracing::warn;
 /// Same retry curve as the other protocols — handles boot-time race.
 const MAX_READ_ATTEMPTS: u32 = 5;
 
-/// Full read pipeline for a Redfish measurement.
+/// Full read pipeline for a Redfish measurement: fetch its resource, then
+/// extract the reading.
 ///
 /// `trust = Some(TlsMutual{..})` + `creds = Some(..)` → HTTPS+mTLS dial
 /// (DSP0266 §13.1 + §13.3.5). Else falls back to plain HTTP.
@@ -28,27 +29,42 @@ pub async fn read_measurement(
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<f64> {
+    let body = fetch_resource(b, trust, creds).await?;
+    extract(&body, b)
+}
+
+/// GET the resource `b.uri` names; several readings can share one fetch.
+pub async fn fetch_resource(
+    b: &RedfishBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<Value> {
     let (client, scheme) = match (trust, creds) {
         (Some(DeviceTrust::TlsMutual { .. }), Some(creds)) => (https_client(creds)?, "https"),
         _ => (plain_client()?, "http"),
     };
     let url = format!("{}://{}:{}/redfish/v1{}", scheme, b.host, b.port, b.uri);
+    fetch(&client, &url).await
+}
 
-    let body = fetch(&client, &url).await?;
+/// The reading `b` names in a fetched resource: its JSON pointer, through
+/// its value_map (text) or scale (number).
+pub fn extract(body: &Value, b: &RedfishBinding) -> Result<f64> {
+    let uri = &b.uri;
     let value: &Value = match &b.json_pointer {
         Some(ptr) => body
             .pointer(ptr)
-            .with_context(|| format!("json pointer {ptr} missed in response from {url}"))?,
-        None => &body,
+            .with_context(|| format!("json pointer {ptr} missed in {uri}"))?,
+        None => body,
     };
     match (value, &b.value_map) {
         (Value::String(text), Some(map)) => map
             .get(text)
             .copied()
-            .with_context(|| format!("Redfish value {text:?} at {url} is not in the value_map")),
+            .with_context(|| format!("Redfish value {text:?} at {uri} is not in the value_map")),
         _ => {
             let raw = value.as_f64().with_context(|| {
-                format!("expected numeric Redfish value at {url}, got {value:?}")
+                format!("expected numeric Redfish value at {uri}, got {value:?}")
             })?;
             Ok(raw * b.scale)
         }

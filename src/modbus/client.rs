@@ -36,15 +36,20 @@ pub async fn read_measurement(
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<f64> {
+    read_on(&mut channel(b, trust, creds)?, b).await
+}
+
+/// `read_measurement` over an open session, so a device's readings can
+/// share one (see `poller`).
+pub async fn read_on(channel: &mut Channel, b: &ModbusTcpBinding) -> Result<f64> {
     let function = read_function(b.function_code).map_err(anyhow::Error::msg)?;
-    let mut channel = channel(b, trust, creds)?;
     let unit_id = unit_id(b)?;
     let count = b.data_type.register_count();
-    let words = read_registers(&mut channel, unit_id, b.address, count, function).await?;
+    let words = read_registers(channel, unit_id, b.address, count, function).await?;
     let mut raw = decode_raw(&words, b.data_type, b.word_order);
     // SunSpec: the exponent lives in its own register, read on the same session.
     if let Some(sf_address) = b.scale_factor_address {
-        let sf = read_registers(&mut channel, unit_id, sf_address, 1, function).await?;
+        let sf = read_registers(channel, unit_id, sf_address, 1, function).await?;
         raw = apply_sunssf(raw, sf[0]).map_err(anyhow::Error::msg)?;
     }
     Ok(apply_scale_offset(raw, b.scale, b.offset))
@@ -97,9 +102,9 @@ pub async fn write_holding(
     .await
 }
 
-/// Modbus Security when the device requires mTLS and the gateway has creds,
-/// plain TCP otherwise.
-fn channel(
+/// A session to `b`'s host: Modbus Security when the device requires mTLS
+/// and the gateway has creds, plain TCP otherwise.
+pub fn channel(
     b: &ModbusTcpBinding,
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
