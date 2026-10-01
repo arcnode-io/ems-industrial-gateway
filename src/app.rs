@@ -20,13 +20,14 @@ use crate::dispatch;
 use crate::dnp3::client as dnp3;
 use crate::envelope;
 use crate::http::client::fetch_asyncapi;
+use crate::inputs;
 use crate::modbus::client as modbus;
 use crate::mqtt::{publisher, subscriber};
 use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
 use crate::synthetic::{self, Computation, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -77,34 +78,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // unconfigured. Security regression should be loud, not silent.
     validate_trust_creds_alignment(&initial_spec, cfg.gateway_credentials.as_ref())?;
 
-    // Synthetic-channel inputs + distribute-binding children's cache-backed
-    // topics (operating_state/state_of_charge — read at dispatch time, not
-    // polled). Subscribed alongside the beacon so the single dispatcher
-    // routes all three. Reconcile-time additions are NOT dynamically
-    // resubscribed today; topology changes that introduce new ones need a
-    // gateway restart (logged + tracked in handoff).
-    let mut input_topics = collect_synthetic_input_topics(&initial_spec, &cfg.site_id);
-    input_topics.extend(collect_distribute_input_topics(&initial_spec, &cfg.site_id));
-    input_topics.extend(collect_der_dispatch_active_power_topics(
-        &initial_spec,
-        &cfg.site_id,
-    ));
-    input_topics.extend(collect_der_dispatch_state_of_charge_topics(
-        &initial_spec,
-        &cfg.site_id,
-    ));
-    // der_dispatch's own target-side channels (published by ems-der-control-
-    // api) — the site-distribution task's reactive trigger. Not templated
-    // (der_dispatch isn't in every spec), so subscribed unconditionally;
-    // holds forever on a site with no der_dispatch, same as its other inputs.
-    input_topics.push(format!(
-        "sites/{}/devices/der_dispatch/measurements/target_active_power/watts",
-        cfg.site_id
-    ));
-    input_topics.push(format!(
-        "sites/{}/devices/der_dispatch/measurements/event_active/none",
-        cfg.site_id
-    ));
+    let input_topics = inputs::input_topics(&initial_spec, &cfg.site_id);
     let cache = synthetic::new_input_cache();
     // Device/channel bindings backing dispatch — refreshed on every
     // successful spec re-fetch so accepts/rejects/writes track live topology.
@@ -119,7 +93,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     // dispatched). Lives here, not in the task, so a reconcile mid-event
     // doesn't re-snapshot the event's own setpoints as "pre-event".
     let site_event = der_dispatch::new_event_memory();
-    let mut beacon_rx = subscriber::subscribe(
+    let (mut beacon_rx, subscriptions) = subscriber::subscribe(
         &mut client,
         &input_topics,
         cache.clone(),
@@ -142,6 +116,9 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         site_event.clone(),
     );
 
+    // The last spec that spawned successfully: what a failed re-fetch falls
+    // back to, so a hiccup never rolls the topology back to boot.
+    let mut current_spec = initial_spec;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -160,30 +137,38 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                     Ok(s) => s,
                     Err(e) => {
                         warn!(error = %e, "respawn fetch failed; keeping current task set");
-                        // Re-spawn the old set so we don't end up idle.
+                        // Re-spawn the last good set so we don't end up idle.
                         let (h, c) =
-                            spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
+                            spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                         task_handles = h;
                         task_cancel = c;
                         continue;
                     }
                 };
                 info!(version = %fresh.info.version, "spec re-fetched");
-                *device_channels_map.write().await = device_channels(&fresh);
-                *device_trust_map.write().await = fresh.x_device_trust.clone();
                 if let Err(e) =
                     validate_trust_creds_alignment(&fresh, cfg.gateway_credentials.as_ref())
                 {
                     warn!(error = %e, "new spec fails trust/creds alignment; keeping current task set");
                     let (h, c) =
-                        spawn_task_set(&initial_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
+                        spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                     task_handles = h;
                     task_cancel = c;
                     continue;
                 }
+                // Only an accepted spec reaches command dispatch.
+                *device_channels_map.write().await = device_channels(&fresh);
+                *device_trust_map.write().await = fresh.x_device_trust.clone();
+                if let Err(e) = subscriptions
+                    .update(&client, &inputs::input_topics(&fresh, &cfg.site_id))
+                    .await
+                {
+                    warn!(error = %e, "subscriptions did not follow the topology change");
+                }
                 let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
                 task_handles = h;
                 task_cancel = c;
+                current_spec = fresh;
             }
         }
     }
@@ -296,15 +281,15 @@ fn spawn_task_set(
             // rebalances its child split on drift with no clamp.
             let guard = envelope::envelope_guard_config(d).map(|guard_config| {
                 envelope::EnvelopeGuardConfig {
-                    import_limit_topic: substitute_site_id(
+                    import_limit_topic: inputs::substitute_site_id(
                         &guard_config.import_limit_topic,
                         &cfg.site_id,
                     ),
-                    export_limit_topic: substitute_site_id(
+                    export_limit_topic: inputs::substitute_site_id(
                         &guard_config.export_limit_topic,
                         &cfg.site_id,
                     ),
-                    active_power_topic: substitute_site_id(
+                    active_power_topic: inputs::substitute_site_id(
                         &guard_config.active_power_topic,
                         &cfg.site_id,
                     ),
@@ -338,7 +323,8 @@ fn spawn_task_set(
         }
     }
 
-    let der_dispatch_source_topics = collect_der_dispatch_active_power_topics(spec, &cfg.site_id);
+    let der_dispatch_source_topics =
+        inputs::collect_der_dispatch_active_power_topics(spec, &cfg.site_id);
     let der_dispatch_cfg = der_dispatch::DerDispatchTaskConfig {
         output_topic: format!(
             "sites/{}/devices/der_dispatch/measurements/actual_active_power/watts",
@@ -406,7 +392,7 @@ fn spawn_synthetic(
         let pairs = binding
             .pairs
             .iter()
-            .map(|p| (substitute_site_id(&p.topic, site_id), p.weight))
+            .map(|p| (inputs::substitute_site_id(&p.topic, site_id), p.weight))
             .collect();
         Computation::WeightedMean { pairs }
     } else {
@@ -420,7 +406,7 @@ fn spawn_synthetic(
         let input_topics = binding
             .inputs
             .iter()
-            .map(|t| substitute_site_id(t, site_id))
+            .map(|t| inputs::substitute_site_id(t, site_id))
             .collect();
         Computation::Operation {
             operation,
@@ -433,111 +419,6 @@ fn spawn_synthetic(
         tick_hz,
     };
     Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
-}
-
-/// Walk the spec for synthetic bindings + collect the unique set of input
-/// topics (with `{site_id}` substituted). Used to subscribe up-front so cached
-/// values are available by the time synthetic tasks tick.
-fn collect_synthetic_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
-    let mut topics: BTreeSet<String> = BTreeSet::new();
-    for channels in spec.x_protocol_source.values() {
-        for source in channels.values() {
-            if let ProtocolBinding::Synthetic(b) = &source.binding {
-                for raw in &b.inputs {
-                    topics.insert(substitute_site_id(raw, site_id));
-                }
-                for pair in &b.pairs {
-                    topics.insert(substitute_site_id(&pair.topic, site_id));
-                }
-            }
-        }
-    }
-    topics.into_iter().collect()
-}
-
-/// Walk the spec's x-command-source for `distribute` bindings and collect
-/// each child's `operating_state_topic`/`state_of_charge_topic` (with
-/// `{site_id}` substituted). These are read from the cache at dispatch time,
-/// not polled — the gateway still needs to be subscribed for them to ever
-/// land in the cache.
-fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
-    let mut topics: BTreeSet<String> = BTreeSet::new();
-    for commands in spec.x_command_source.values() {
-        for source in commands.values() {
-            if let ProtocolBinding::Distribute(d) = &source.binding {
-                for child in &d.children {
-                    topics.insert(substitute_site_id(&child.operating_state_topic, site_id));
-                    topics.insert(substitute_site_id(&child.state_of_charge_topic, site_id));
-                }
-                if let Some(guard) = envelope::envelope_guard_config(d) {
-                    topics.insert(substitute_site_id(&guard.import_limit_topic, site_id));
-                    topics.insert(substitute_site_id(&guard.export_limit_topic, site_id));
-                    topics.insert(substitute_site_id(&guard.active_power_topic, site_id));
-                    if let Some(poi) = &guard.poi_active_power_topic {
-                        topics.insert(substitute_site_id(poi, site_id));
-                    }
-                }
-            }
-        }
-    }
-    topics.into_iter().collect()
-}
-
-/// Every distribute-parent device_id — today, every `bess_module` instance.
-/// A device qualifies by having at least one `Distribute`-bound command, not
-/// by template name — stays correct at any module count and at any
-/// distribution tier (module→rack today, site→module built on the same
-/// detection).
-fn distribute_parent_device_ids(spec: &AsyncApiSpec) -> Vec<String> {
-    spec.x_command_source
-        .iter()
-        .filter(|(_, commands)| {
-            commands
-                .values()
-                .any(|source| matches!(source.binding, ProtocolBinding::Distribute(_)))
-        })
-        .map(|(device_id, _)| device_id.clone())
-        .collect()
-}
-
-/// Each distribute-parent's own `active_power` topic (with `{site_id}`
-/// substituted) — feeds `der_dispatch::actual_active_power`'s site-total
-/// sum. Deliberately does NOT include state_of_charge: that's a different
-/// task's (`site_distribution`) concern, and mixing it into this list would
-/// make the sum wait on an unrelated measurement that may never publish.
-fn collect_der_dispatch_active_power_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
-    distribute_parent_device_ids(spec)
-        .iter()
-        .map(|device_id| {
-            substitute_site_id(
-                &format!("sites/{{site_id}}/devices/{device_id}/measurements/active_power/watts"),
-                site_id,
-            )
-        })
-        .collect()
-}
-
-/// Each distribute-parent's own `state_of_charge` topic (with `{site_id}`
-/// substituted) — not summed by anything, just needs to be subscribed so
-/// `site_distribution`'s SoC-weighted split has it cached.
-fn collect_der_dispatch_state_of_charge_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
-    distribute_parent_device_ids(spec)
-        .iter()
-        .map(|device_id| {
-            substitute_site_id(
-                &format!(
-                    "sites/{{site_id}}/devices/{device_id}/measurements/state_of_charge/percent"
-                ),
-                site_id,
-            )
-        })
-        .collect()
-}
-
-/// Substitute `{site_id}` in an input topic template. `{device_id}` is
-/// already resolved by ems-device-api at AsyncAPI generation time.
-fn substitute_site_id(template: &str, site_id: &str) -> String {
-    template.replace("{site_id}", site_id)
 }
 
 /// One per-measurement loop. Ticks at `poll_rate_hz`, reads via the protocol

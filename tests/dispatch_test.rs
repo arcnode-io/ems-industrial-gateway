@@ -98,7 +98,7 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
 
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw", "arcnode_gateway", "test").await?;
-    let _beacon_rx = subscriber::subscribe(
+    let (_beacon_rx, _subscriptions) = subscriber::subscribe(
         &mut gateway,
         &[],
         new_input_cache(),
@@ -172,7 +172,7 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
 
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw2", "arcnode_gateway", "test").await?;
-    let _beacon_rx = subscriber::subscribe(
+    let (_beacon_rx, _subscriptions) = subscriber::subscribe(
         &mut gateway,
         &[],
         new_input_cache(),
@@ -214,7 +214,7 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
     let (_mock, channels) = known_device_channels().await?;
     let mut gateway =
         publisher::connect(&url, "dispatch-test-gw3", "arcnode_gateway", "test").await?;
-    let _beacon_rx = subscriber::subscribe(
+    let (_beacon_rx, _subscriptions) = subscriber::subscribe(
         &mut gateway,
         &[],
         new_input_cache(),

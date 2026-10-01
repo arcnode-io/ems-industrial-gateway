@@ -11,6 +11,7 @@ use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
+use crate::mqtt::subscriptions::{Subscriptions, TOPIC_TOPOLOGY_CHANGED};
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
@@ -23,15 +24,6 @@ use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tracing::{info, trace, warn};
 
-/// MQTT topic the gateway subscribes to for topology-change beacons.
-const TOPIC_TOPOLOGY_CHANGED: &str = "system/topology_changed";
-/// QoS for the beacon subscription. At-least-once is fine — `watch` collapses
-/// duplicates into a single wake anyway.
-const BEACON_QOS: i32 = 1;
-/// QoS for measurement-channel subscriptions; matches ADR-002 §11 (measurements at QoS 0).
-const MEASUREMENT_QOS: i32 = 0;
-/// QoS for the commands/ subscription — at-least-once per ADR-002 §11.
-const COMMAND_QOS: i32 = 1;
 /// Size of the paho stream buffer. 1024 covers high-rate measurements + beacons.
 const STREAM_CAPACITY: usize = 1024;
 
@@ -82,11 +74,12 @@ pub async fn subscribe(
     device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
     creds: Option<GatewayCredentials>,
     last_requested: LastRequestedSetpoints,
-) -> Result<watch::Receiver<u64>> {
+) -> Result<(watch::Receiver<u64>, Subscriptions)> {
     let mut stream = client.get_stream(STREAM_CAPACITY);
     // Beacon, dispatch commands (HMI operator → gateway, acked on
     // events/dispatch_state by dispatch::handle_command), then every input.
-    let (topics, qos) = subscription_list(site_id, input_topics);
+    let subscriptions = Subscriptions::new(site_id, input_topics);
+    let (topics, qos) = subscriptions.current();
     client
         .subscribe_many(&topics, &qos)
         .await
@@ -97,8 +90,11 @@ pub async fn subscribe(
     );
     // Reason: subscriptions are broker-side session state. After a broker
     // restart paho reconnects the socket but the broker holds none, so the
-    // gateway would go silently deaf. Re-issue them on every reconnect.
+    // gateway would go silently deaf. Re-issue whatever is current (the
+    // topology may have changed since boot) on every reconnect.
+    let on_reconnect = subscriptions.clone();
     client.set_connected_callback(move |cli: &AsyncClient| {
+        let (topics, qos) = on_reconnect.current();
         cli.subscribe_many(&topics, &qos);
         info!(topics = topics.len(), "MQTT reconnected; resubscribed");
     });
@@ -145,22 +141,7 @@ pub async fn subscribe(
             }
         }
     });
-    Ok(rx)
-}
-
-/// Every topic the gateway subscribes to, paired with its QoS: the topology
-/// beacon, the site's commands filter, then each measurement input.
-fn subscription_list(site_id: &str, input_topics: &[String]) -> (Vec<String>, Vec<i32>) {
-    let mut topics = vec![
-        TOPIC_TOPOLOGY_CHANGED.to_string(),
-        format!("sites/{site_id}/devices/+/commands/#"),
-    ];
-    let mut qos = vec![BEACON_QOS, COMMAND_QOS];
-    for topic in input_topics {
-        topics.push(topic.clone());
-        qos.push(MEASUREMENT_QOS);
-    }
-    (topics, qos)
+    Ok((rx, subscriptions))
 }
 
 /// Parse a FloatSample payload + write `(value, Instant::now())` into the
@@ -202,24 +183,6 @@ mod tests {
         cache_float_sample(&cache, "topic", br#"{"ts":"now"}"#);
         // Assert — neither call inserted
         assert_eq!(cache.len(), 0);
-    }
-
-    #[test]
-    fn subscription_list_covers_beacon_commands_and_every_input() {
-        // Arrange
-        let inputs = vec!["sites/s/devices/a/measurements/x/watts".to_string()];
-        // Act
-        let (topics, qos) = subscription_list("s", &inputs);
-        // Assert — what reconnect re-issues must match the initial subscribe
-        assert_eq!(
-            topics,
-            vec![
-                TOPIC_TOPOLOGY_CHANGED.to_string(),
-                "sites/s/devices/+/commands/#".to_string(),
-                inputs[0].clone(),
-            ]
-        );
-        assert_eq!(qos, vec![BEACON_QOS, COMMAND_QOS, MEASUREMENT_QOS]);
     }
 
     #[test]
