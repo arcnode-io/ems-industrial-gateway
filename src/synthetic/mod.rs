@@ -16,6 +16,6 @@ pub mod cache;
 pub mod operation;
 pub mod task;
 
-pub use cache::{InputCache, new_input_cache};
+pub use cache::{InputCache, as_number, new_input_cache};
 pub use operation::Operation;
 pub use task::{Computation, SyntheticTaskConfig};

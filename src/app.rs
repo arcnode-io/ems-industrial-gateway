@@ -19,6 +19,7 @@ use crate::envelope;
 use crate::http::client::fetch_asyncapi;
 use crate::inputs;
 use crate::mqtt::{publisher, subscriber};
+use crate::payload;
 use crate::poller;
 use crate::synthetic::{self, Computation, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
@@ -241,10 +242,19 @@ fn spawn_task_set(
                 }
                 continue;
             }
+            // A schema that won't compile falls back to number publishing,
+            // loudly: one bad schema mustn't stop the device's readings.
+            let payload = source.payload.as_ref().and_then(|reference| {
+                payload::resolve(reference, &spec.components.schemas)
+                    .map_err(|e| warn!(%topic, error = %e, "payload schema unusable"))
+                    .ok()
+            });
             points.push(poller::Point {
                 topic,
                 binding: clone_binding(&source.binding),
                 period: Duration::from_secs_f64(1.0 / poll_rate),
+                payload,
+                value_map: source.value_map.clone(),
             });
         }
         if points.is_empty() {
@@ -462,7 +472,6 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             uri: r.uri.clone(),
             json_pointer: r.json_pointer.clone(),
             scale: r.scale,
-            value_map: r.value_map.clone(),
         }),
         ProtocolBinding::Dnp3Tcp(d) => ProtocolBinding::Dnp3Tcp(Dnp3TcpBinding {
             host: d.host.clone(),

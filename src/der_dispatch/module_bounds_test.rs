@@ -49,7 +49,7 @@ fn discovers_modules_with_distribute_bindings_and_cached_soc() {
     let cache = new_input_cache();
     cache.insert(
         "sites/site_001/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
-        (70.0, Instant::now()),
+        (serde_json::json!(70.0), Instant::now()),
     );
     let mut commands = HashMap::new();
     commands.insert(
@@ -75,7 +75,7 @@ fn headroom_is_direction_dependent_on_target_sign() {
     let cache = new_input_cache();
     cache.insert(
         "sites/site_001/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
-        (50.0, Instant::now()),
+        (serde_json::json!(50.0), Instant::now()),
     );
     let mut commands = HashMap::new();
     commands.insert(

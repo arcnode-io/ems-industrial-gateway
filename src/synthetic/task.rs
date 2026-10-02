@@ -6,7 +6,7 @@
 //! see no traffic during cold start / outage; quality is recoverable from
 //! the input channels' own status measurements per ADR §5.
 
-use crate::synthetic::cache::InputCache;
+use crate::synthetic::cache::{InputCache, as_number};
 use crate::synthetic::operation::{self, Operation};
 use anyhow::Result;
 use chrono::Utc;
@@ -126,7 +126,7 @@ fn gather_inputs(input_topics: &[String], cache: &InputCache) -> Option<Vec<f64>
     let mut values = Vec::with_capacity(input_topics.len());
     for topic in input_topics {
         let entry = cache.get(topic)?;
-        values.push(entry.0);
+        values.push(as_number(&entry.0)?);
     }
     Some(values)
 }
@@ -137,7 +137,7 @@ fn gather_pairs(pairs: &[(String, f64)], cache: &InputCache) -> Option<Vec<(f64,
     let mut resolved = Vec::with_capacity(pairs.len());
     for (topic, weight) in pairs {
         let entry = cache.get(topic)?;
-        resolved.push((entry.0, *weight));
+        resolved.push((as_number(&entry.0)?, *weight));
     }
     Some(resolved)
 }
@@ -162,7 +162,7 @@ mod tests {
     fn gather_inputs_holds_when_any_input_missing() {
         // Arrange — one of two topics not yet cached
         let cache = new_input_cache();
-        cache.insert("a".into(), (10.0, Instant::now()));
+        cache.insert("a".into(), (serde_json::json!(10.0), Instant::now()));
         // Act
         let result = gather_inputs(&["a".into(), "b".into()], &cache);
         // Assert
@@ -173,8 +173,8 @@ mod tests {
     fn gather_inputs_returns_values_when_all_cached() {
         // Arrange — both inputs cached
         let cache = new_input_cache();
-        cache.insert("a".into(), (10.0, Instant::now()));
-        cache.insert("b".into(), (3.0, Instant::now()));
+        cache.insert("a".into(), (serde_json::json!(10.0), Instant::now()));
+        cache.insert("b".into(), (serde_json::json!(3.0), Instant::now()));
         // Act
         let values = gather_inputs(&["a".into(), "b".into()], &cache).unwrap();
         // Assert
@@ -185,7 +185,7 @@ mod tests {
     fn gather_pairs_holds_when_any_pair_missing() {
         // Arrange — one of two topics not yet cached
         let cache = new_input_cache();
-        cache.insert("a".into(), (50.0, Instant::now()));
+        cache.insert("a".into(), (serde_json::json!(50.0), Instant::now()));
         // Act
         let result = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache);
         // Assert
@@ -196,8 +196,8 @@ mod tests {
     fn gather_pairs_returns_value_weight_pairs_when_all_cached() {
         // Arrange
         let cache = new_input_cache();
-        cache.insert("a".into(), (50.0, Instant::now()));
-        cache.insert("b".into(), (80.0, Instant::now()));
+        cache.insert("a".into(), (serde_json::json!(50.0), Instant::now()));
+        cache.insert("b".into(), (serde_json::json!(80.0), Instant::now()));
         // Act
         let pairs = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache).unwrap();
         // Assert — weight carried through unchanged, value from the cache

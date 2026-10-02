@@ -50,6 +50,17 @@ pub struct AsyncApiSpec {
     /// the spec was emitted by a pre-trust device-api (default = no trust).
     #[serde(rename = "x-device-trust", default)]
     pub x_device_trust: HashMap<String, DeviceTrust>,
+    /// Named schemas, including each measurement's payload schema.
+    #[serde(default)]
+    pub components: Components,
+}
+
+/// AsyncAPI `components`, narrowed to the schemas measurements reference.
+#[derive(Debug, Default, Deserialize)]
+pub struct Components {
+    /// Schema name → JSON Schema.
+    #[serde(default)]
+    pub schemas: HashMap<String, serde_json::Value>,
 }
 
 /// One x-protocol-source entry: a protocol binding plus the channel-level
@@ -62,6 +73,14 @@ pub struct ProtocolSource {
     /// Poll cadence per measurement; `None` means the DTM author omitted it
     /// and the gateway should apply its default (see `app.rs`).
     pub poll_rate_hz: Option<f64>,
+    /// The measurement's payload schema, as `{"$ref": "#/components/schemas/…"}`.
+    /// Absent: published as a plain number.
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    /// Raw reading → our label, for enum measurements: vendor text
+    /// (`"SWPowerCap"`) or a register code written as text (`"2"`).
+    #[serde(default)]
+    pub value_map: Option<HashMap<String, String>>,
     /// The protocol binding itself; variant discriminated by `protocol`.
     #[serde(flatten)]
     pub binding: ProtocolBinding,

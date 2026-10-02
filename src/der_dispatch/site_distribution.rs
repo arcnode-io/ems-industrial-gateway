@@ -23,7 +23,7 @@ use crate::der_dispatch::SharedEventMemory;
 use crate::der_dispatch::module_bounds::modules_with_bounds;
 use crate::dispatch::LastRequestedSetpoints;
 use crate::dispatch::allocation::{self, AllocationPolicy};
-use crate::synthetic::InputCache;
+use crate::synthetic::{InputCache, as_number};
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
 use std::collections::HashMap;
@@ -120,7 +120,10 @@ async fn tick_once(
     last_requested: &LastRequestedSetpoints,
     memory: &SharedEventMemory,
 ) {
-    let Some(event_active) = cache.get(&cfg.event_active_topic).map(|e| e.0) else {
+    let Some(event_active) = cache
+        .get(&cfg.event_active_topic)
+        .and_then(|e| as_number(&e.0))
+    else {
         return; // hold — event_active not cached yet
     };
     if event_active < 0.5 {
@@ -129,7 +132,7 @@ async fn tick_once(
     }
     let operator = operator_setpoints(last_requested).await;
     memory.lock().unwrap().begin(|| operator);
-    let Some(target) = cache.get(&cfg.target_topic).map(|e| e.0) else {
+    let Some(target) = cache.get(&cfg.target_topic).and_then(|e| as_number(&e.0)) else {
         return; // hold — target not cached yet
     };
 

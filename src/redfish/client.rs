@@ -5,6 +5,7 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::RedfishBinding;
 use crate::config::GatewayCredentials;
+use crate::payload::Raw;
 use crate::redfish::tls;
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -28,7 +29,7 @@ pub async fn read_measurement(
     b: &RedfishBinding,
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
-) -> Result<f64> {
+) -> Result<Raw> {
     let body = fetch_resource(b, trust, creds).await?;
     extract(&body, b)
 }
@@ -47,9 +48,9 @@ pub async fn fetch_resource(
     fetch(&client, &url).await
 }
 
-/// The reading `b` names in a fetched resource: its JSON pointer, through
-/// its value_map (text) or scale (number).
-pub fn extract(body: &Value, b: &RedfishBinding) -> Result<f64> {
+/// The reading `b` names in a fetched resource: text as given (an enum's
+/// value_map turns it into a label), a number times `b.scale`.
+pub fn extract(body: &Value, b: &RedfishBinding) -> Result<Raw> {
     let uri = &b.uri;
     let value: &Value = match &b.json_pointer {
         Some(ptr) => body
@@ -57,16 +58,13 @@ pub fn extract(body: &Value, b: &RedfishBinding) -> Result<f64> {
             .with_context(|| format!("json pointer {ptr} missed in {uri}"))?,
         None => body,
     };
-    match (value, &b.value_map) {
-        (Value::String(text), Some(map)) => map
-            .get(text)
-            .copied()
-            .with_context(|| format!("Redfish value {text:?} at {uri} is not in the value_map")),
+    match value {
+        Value::String(text) => Ok(Raw::Text(text.clone())),
         _ => {
-            let raw = value.as_f64().with_context(|| {
-                format!("expected numeric Redfish value at {uri}, got {value:?}")
-            })?;
-            Ok(raw * b.scale)
+            let raw = value
+                .as_f64()
+                .with_context(|| format!("expected a number or text at {uri}, got {value:?}"))?;
+            Ok(Raw::Number(raw * b.scale))
         }
     }
 }

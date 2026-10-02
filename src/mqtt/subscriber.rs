@@ -4,7 +4,7 @@
 //! One paho `get_stream()` per client (paho enforces this), so this module
 //! owns the single subscriber stream and demuxes by topic: beacons increment
 //! a `watch::Receiver<u64>` counter (collapsed to a single wake for the
-//! reconciler); per-channel FloatSample messages write into the shared
+//! reconciler); per-channel samples write into the shared
 //! `InputCache` for synthetic tasks to read on their next tick.
 
 use crate::asyncapi::trust::DeviceTrust;
@@ -27,34 +27,12 @@ use tracing::{info, trace, warn};
 /// Size of the paho stream buffer. 1024 covers high-rate measurements + beacons.
 const STREAM_CAPACITY: usize = 1024;
 
-/// FloatSample wire shape — `{ts, value}` per ADR-002 §5. Only `value` is
-/// pulled into the cache today; `ts` is ignored (cache stamps Instant::now()
-/// for local-monotonic ordering, separate from the publisher's wall-clock ts).
-///
-/// `value` also accepts a JSON boolean (coerced true/false -> 1.0/0.0) — the
-/// cache is numeric-only, but BooleanSample measurements (der_dispatch's
-/// event_active etc.) publish a literal JSON bool on the wire, not a number.
+/// A measurement sample, `{ts, value}`. Only `value` is cached; `ts` is
+/// ignored (the cache stamps its own `Instant` for local ordering).
 #[derive(Debug, Deserialize)]
-struct FloatSample {
-    /// The numeric (or boolean, coerced) reading parsed from the JSON payload.
-    #[serde(deserialize_with = "value_as_f64")]
-    value: f64,
-}
-
-/// Deserialize `value` as f64, coercing a JSON boolean to 1.0/0.0.
-fn value_as_f64<'de, D>(deserializer: D) -> std::result::Result<f64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    match serde_json::Value::deserialize(deserializer)? {
-        serde_json::Value::Number(n) => n
-            .as_f64()
-            .ok_or_else(|| serde::de::Error::custom("value is not a valid f64")),
-        serde_json::Value::Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
-        other => Err(serde::de::Error::custom(format!(
-            "value must be a number or boolean, got {other}"
-        ))),
-    }
+struct Sample {
+    /// The reading as published: a number, a boolean or an enum label.
+    value: serde_json::Value,
 }
 
 /// Subscribe to `system/topology_changed` AND the given measurement topics in
@@ -137,63 +115,74 @@ pub async fn subscribe(
                     warn!(topic = %msg.topic(), error = %err, "dispatch ack publish failed");
                 }
             } else {
-                cache_float_sample(&cache, msg.topic(), msg.payload());
+                cache_sample(&cache, msg.topic(), msg.payload());
             }
         }
     });
     Ok((rx, subscriptions))
 }
 
-/// Parse a FloatSample payload + write `(value, Instant::now())` into the
+/// Parse a sample payload + write `(value, Instant::now())` into the
 /// cache. Malformed payloads logged and dropped — one bad sample shouldn't
 /// stop the subscriber loop.
-fn cache_float_sample(cache: &InputCache, topic: &str, payload: &[u8]) {
-    match serde_json::from_slice::<FloatSample>(payload) {
-        Ok(sample) => {
-            cache.insert(topic.to_string(), (sample.value, Instant::now()));
-            trace!(%topic, value = sample.value, "input cached");
+fn cache_sample(cache: &InputCache, topic: &str, payload: &[u8]) {
+    match serde_json::from_slice::<Sample>(payload) {
+        Ok(Sample { value }) if value.is_number() || value.is_boolean() || value.is_string() => {
+            trace!(%topic, %value, "input cached");
+            cache.insert(topic.to_string(), (value, Instant::now()));
         }
-        Err(err) => warn!(%topic, error = %err, "FloatSample parse failed; dropping"),
+        Ok(Sample { value }) => {
+            warn!(%topic, %value, "sample value is not a measurement; dropping")
+        }
+        Err(err) => warn!(%topic, error = %err, "sample parse failed; dropping"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthetic::new_input_cache;
+    use crate::synthetic::{as_number, new_input_cache};
 
     #[test]
-    fn cache_float_sample_inserts_valid_payload() {
+    fn cache_sample_inserts_valid_payload() {
         // Arrange
         let cache = new_input_cache();
         let topic = "sites/x/devices/y/measurements/z/watts";
         let payload = br#"{"ts":"2026-05-17T00:00:00Z","value":42.5}"#;
         // Act
-        cache_float_sample(&cache, topic, payload);
+        cache_sample(&cache, topic, payload);
         // Assert
         let entry = cache.get(topic).expect("topic should be cached");
-        assert!((entry.0 - 42.5).abs() < f64::EPSILON);
+        assert_eq!(entry.0, serde_json::json!(42.5));
     }
 
     #[test]
-    fn cache_float_sample_drops_malformed_payload() {
+    fn cache_sample_drops_malformed_payload() {
         // Arrange — payload missing `value` field
         let cache = new_input_cache();
-        cache_float_sample(&cache, "topic", b"not json");
-        cache_float_sample(&cache, "topic", br#"{"ts":"now"}"#);
+        cache_sample(&cache, "topic", b"not json");
+        cache_sample(&cache, "topic", br#"{"ts":"now"}"#);
         // Assert — neither call inserted
         assert_eq!(cache.len(), 0);
     }
 
     #[test]
-    fn cache_float_sample_coerces_boolean_value_to_one_or_zero() {
+    fn a_label_sample_is_cached_as_its_label() {
+        // A rack's operating_state arrives as "FAULT"; distribution reads it
+        let cache = new_input_cache();
+        cache_sample(&cache, "s", br#"{"ts":"now","value":"FAULT"}"#);
+        assert_eq!(cache.get("s").unwrap().0, serde_json::json!("FAULT"));
+    }
+
+    #[test]
+    fn cache_sample_coerces_boolean_value_to_one_or_zero() {
         // Arrange — BooleanSample wire shape (der_dispatch.event_active etc.):
         // `{ts, value: true|false}`, a JSON bool, not a number.
         let cache = new_input_cache();
-        cache_float_sample(&cache, "t", br#"{"ts":"now","value":true}"#);
-        cache_float_sample(&cache, "f", br#"{"ts":"now","value":false}"#);
+        cache_sample(&cache, "t", br#"{"ts":"now","value":true}"#);
+        cache_sample(&cache, "f", br#"{"ts":"now","value":false}"#);
         // Assert
-        assert_eq!(cache.get("t").unwrap().0, 1.0);
-        assert_eq!(cache.get("f").unwrap().0, 0.0);
+        assert_eq!(as_number(&cache.get("t").unwrap().0), Some(1.0));
+        assert_eq!(as_number(&cache.get("f").unwrap().0), Some(0.0));
     }
 }

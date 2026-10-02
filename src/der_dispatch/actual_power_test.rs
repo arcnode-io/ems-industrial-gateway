@@ -9,8 +9,8 @@ use std::time::Instant;
 #[test]
 fn sums_every_cached_topic() {
     let cache = new_input_cache();
-    cache.insert("a".to_string(), (100.0, Instant::now()));
-    cache.insert("b".to_string(), (250.0, Instant::now()));
+    cache.insert("a".to_string(), (serde_json::json!(100.0), Instant::now()));
+    cache.insert("b".to_string(), (serde_json::json!(250.0), Instant::now()));
     let total = sum_cached(&["a".to_string(), "b".to_string()], &cache);
     assert_eq!(total, Some(350.0));
 }
@@ -18,7 +18,7 @@ fn sums_every_cached_topic() {
 #[test]
 fn holds_when_any_source_missing() {
     let cache = new_input_cache();
-    cache.insert("a".to_string(), (100.0, Instant::now()));
+    cache.insert("a".to_string(), (serde_json::json!(100.0), Instant::now()));
     let total = sum_cached(&["a".to_string(), "b".to_string()], &cache);
     assert_eq!(total, None);
 }

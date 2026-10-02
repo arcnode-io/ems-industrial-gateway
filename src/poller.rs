@@ -13,15 +13,14 @@
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
-use crate::bacnet::client as bacnet;
-use crate::bacnet_sc::client as bacnet_sc;
 use crate::config::GatewayCredentials;
-use crate::dnp3::client as dnp3;
 use crate::modbus::client as modbus;
 use crate::mqtt::publisher;
+use crate::payload::{Payload, Raw};
+use crate::read::read_value;
 use crate::redfish::client as redfish;
-use crate::snmp::client as snmp;
-use anyhow::Result;
+use anyhow::{Result, bail};
+use chrono::Utc;
 use rodbus::client::Channel;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -38,6 +37,10 @@ pub struct Point {
     pub binding: ProtocolBinding,
     /// Time between reads.
     pub period: Duration,
+    /// Its payload schema; absent, it publishes as a plain number.
+    pub payload: Option<Payload>,
+    /// Raw reading → label, for enum measurements.
+    pub value_map: Option<HashMap<String, String>>,
 }
 
 /// Poll `points` (all on one device) until `cancel` fires. `trust` is the
@@ -119,19 +122,34 @@ async fn poll_due(
                         }
                     }
                 }
-                modbus::read_on(sessions.get_mut(&key).expect("just inserted"), b).await
+                modbus::read_on(sessions.get_mut(&key).expect("just inserted"), b)
+                    .await
+                    .map(Raw::Number)
             }
             other => read_value(other, trust, creds).await,
         };
         match read {
-            Ok(value) => {
-                if let Err(e) = publisher::publish_measurement(client, &p.topic, value).await {
+            Ok(raw) => {
+                if let Err(e) = publish(client, p, &raw).await {
                     warn!(topic = %p.topic, error = %e, "publish failed");
                 }
             }
             Err(e) => warn!(topic = %p.topic, error = %e, "read failed; skipping tick"),
         }
         next[i] = advance(next[i], p.period, Instant::now());
+    }
+}
+
+/// Publish `raw` as its schema says (number, boolean or label), checked
+/// against that schema; with no schema, as a plain number.
+async fn publish(client: &paho_mqtt::AsyncClient, p: &Point, raw: &Raw) -> Result<()> {
+    match (&p.payload, raw) {
+        (Some(payload), raw) => {
+            let sample = payload.sample(raw, p.value_map.as_ref(), &Utc::now().to_rfc3339())?;
+            publisher::publish_sample(client, &p.topic, &sample).await
+        }
+        (None, Raw::Number(n)) => publisher::publish_measurement(client, &p.topic, *n).await,
+        (None, Raw::Text(text)) => bail!("text reading {text:?} has no payload schema"),
     }
 }
 
@@ -148,32 +166,6 @@ fn advance(due_at: Instant, period: Duration, now: Instant) -> Instant {
         now + period
     } else {
         on_schedule
-    }
-}
-
-/// Single-point protocol dispatch. Add a `match` arm when a new
-/// `ProtocolBinding` variant lands.
-pub(crate) async fn read_value(
-    binding: &ProtocolBinding,
-    trust: Option<&DeviceTrust>,
-    creds: Option<&GatewayCredentials>,
-) -> Result<f64> {
-    match binding {
-        ProtocolBinding::ModbusTcp(b) => modbus::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Snmp(b) => snmp::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Redfish(b) => redfish::read_measurement(b, trust, creds).await,
-        ProtocolBinding::Dnp3Tcp(b) => dnp3::read_measurement(b, trust, creds).await,
-        ProtocolBinding::BacnetIp(b) => bacnet::read_measurement(b, trust, creds).await,
-        ProtocolBinding::BacnetSc(b) => bacnet_sc::read_measurement(b, trust, creds).await,
-        // Synthetic channels are driven by `src/synthetic/`; the poller is
-        // never handed one. Unreachable is a tripwire for that routing.
-        ProtocolBinding::Synthetic(_) => {
-            unreachable!("synthetic bindings are driven by the synthetic module, not the poller")
-        }
-        // Distribute is command-only; it never appears in x-protocol-source.
-        ProtocolBinding::Distribute(_) => {
-            unreachable!("distribute bindings are commands, never a measurement source")
-        }
     }
 }
 

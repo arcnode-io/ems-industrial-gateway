@@ -6,7 +6,7 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::asyncapi::types::ModbusTcpBinding;
-use ems_industrial_gateway::modbus::client::read_measurement;
+use ems_industrial_gateway::modbus::client::{channel, read_on};
 use rodbus::server::{
     AddressFilter, RequestHandler, ServerHandle, ServerHandlerMap, spawn_tcp_server_task,
 };
@@ -89,19 +89,24 @@ async fn a_device_reuses_one_modbus_session() -> Result<()> {
 
 #[tokio::test]
 async fn a_modbus_exception_fails_at_once() -> Result<()> {
-    // Arrange — a binding at an address the meter doesn't have
+    // Arrange — a session already connected (one good read), so the timing
+    // below is the exception alone, not the session's first connect
     let (meter, _server) = spawn_meter().await?;
-    let binding: ModbusTcpBinding = serde_json::from_value(json!({
-        "host": "127.0.0.1", "port": meter.port(), "unit_id": "1", "function_code": 3,
-        "address": 99, "data_type": "uint16", "scale": 1.0, "offset": 0.0,
-    }))?;
-    // Act
+    let binding = |address: u16| -> Result<ModbusTcpBinding> {
+        Ok(serde_json::from_value(json!({
+            "host": "127.0.0.1", "port": meter.port(), "unit_id": "1", "function_code": 3,
+            "address": address, "data_type": "uint16", "scale": 1.0, "offset": 0.0,
+        }))?)
+    };
+    let mut session = channel(&binding(0)?, None, None)?;
+    read_on(&mut session, &binding(0)?).await?;
+    // Act — an address the meter doesn't have
     let started = Instant::now();
-    let result = read_measurement(&binding, None, None).await;
+    let result = read_on(&mut session, &binding(99)?).await;
     // Assert — a definite answer from the device: no retries, no backoff
     assert!(result.is_err());
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_millis(500),
         "took {:?}",
         started.elapsed()
     );

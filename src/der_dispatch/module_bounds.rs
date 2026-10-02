@@ -4,7 +4,7 @@
 use super::site_distribution::CHANNEL_KEY;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::dispatch::allocation::{ChildCapacity, OperatingState};
-use crate::synthetic::InputCache;
+use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
 
 /// Every distribute-parent device (a `bess_module`) with a resolvable
@@ -28,7 +28,7 @@ pub(super) fn modules_with_bounds(
         };
         let soc_topic =
             format!("sites/{site_id}/devices/{device_id}/measurements/state_of_charge/percent");
-        let state_of_charge = cache.get(&soc_topic).map(|e| e.0)?;
+        let state_of_charge = cache.get(&soc_topic).and_then(|e| as_number(&e.0))?;
         let headroom = if target < 0.0 {
             power_min.abs()
         } else {

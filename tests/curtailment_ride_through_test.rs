@@ -2,8 +2,8 @@
 //! asks the site to shed load, the BESS covers the whole ask and the GPUs
 //! keep running at full power, unthrottled. The gateway meets the
 //! curtailment by dispatching the rack, never by touching the GPU node, and
-//! the GPU telemetry it publishes (Redfish power and NVIDIA throttle reason,
-//! text through value_map) shows full power and no throttle throughout.
+//! the GPU telemetry it publishes (Redfish power as a number, NVIDIA's
+//! throttle reason as our label) shows full power and no throttle throughout.
 
 mod fixtures;
 
@@ -48,6 +48,21 @@ async fn spawn_gpu_bmc() -> Result<u16> {
     Ok(port)
 }
 
+/// The two GPU readings' payload schemas, as device-api's AsyncAPI
+/// declares them: power a number, throttle reason one of our labels.
+fn gpu_schemas() -> Value {
+    let sample = |value: Value| {
+        json!({
+            "type": "object", "required": ["ts", "value"],
+            "properties": { "ts": { "type": "string", "format": "date-time" }, "value": value },
+        })
+    };
+    json!({
+        "GpuNode_Gpu1Power": sample(json!({ "type": "number" })),
+        "GpuNode_Gpu1ThrottleReason": sample(json!({ "type": "string", "enum": ["NA", "SW_POWER_CAP"] })),
+    })
+}
+
 /// gpu_node's per-GPU bindings, as edp-api's gpu_node.yaml declares them.
 fn gpu_measurements(port: u16) -> Value {
     let redfish = |uri: &str, pointer: &str, extra: Value| {
@@ -64,12 +79,15 @@ fn gpu_measurements(port: u16) -> Value {
         "gpu_1_power": redfish(
             "/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1/EnvironmentMetrics",
             "/PowerWatts/Reading",
-            json!({ "unit": "watts" }),
+            json!({ "unit": "watts", "payload": { "$ref": "#/components/schemas/GpuNode_Gpu1Power" } }),
         ),
         "gpu_1_throttle_reason": redfish(
             "/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1/ProcessorMetrics",
             "/Oem/Nvidia/ThrottleReasons/0",
-            json!({ "value_map": { "NA": 0, "SWPowerCap": 1 } }),
+            json!({
+                "payload": { "$ref": "#/components/schemas/GpuNode_Gpu1ThrottleReason" },
+                "value_map": { "NA": "NA", "SWPowerCap": "SW_POWER_CAP" },
+            }),
         ),
     })
 }
@@ -120,6 +138,7 @@ async fn a_curtailment_is_covered_by_battery_while_gpus_stay_at_full_power() -> 
     let stub = spawn_asyncapi_stub(json!({
         "info": { "version": "v1" },
         "x-protocol-source": { GPU_NODE: gpu_measurements(bmc_port) },
+        "components": { "schemas": gpu_schemas() },
         "x-command-source": {
             MODULE: { "set_active_power": module_command() },
             RACK: { "set_active_power": rack_command(rack_port) },
@@ -208,7 +227,7 @@ async fn a_curtailment_is_covered_by_battery_while_gpus_stay_at_full_power() -> 
             let Some(Some(msg)) = gpu_telemetry.next().await else {
                 continue;
             };
-            let value = serde_json::from_slice::<Value>(msg.payload())?["value"].as_f64();
+            let value = Some(serde_json::from_slice::<Value>(msg.payload())?["value"].clone());
             if msg.topic().contains("/gpu_1_power/") {
                 power = value;
             } else if msg.topic().contains("/gpu_1_throttle_reason/") {
@@ -221,13 +240,13 @@ async fn a_curtailment_is_covered_by_battery_while_gpus_stay_at_full_power() -> 
     .map_err(|_| anyhow::anyhow!("no GPU telemetry during the curtailment"))??;
     assert_eq!(
         power,
-        Some(GPU_FULL_POWER_W),
+        Some(json!(GPU_FULL_POWER_W)),
         "GPU power during the curtailment"
     );
     assert_eq!(
         throttle,
-        Some(0.0),
-        "GPU throttle reason (0 = NA) during the curtailment"
+        Some(json!("NA")),
+        "GPU throttle reason during the curtailment"
     );
 
     cancel.cancel();

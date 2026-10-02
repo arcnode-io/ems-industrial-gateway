@@ -4,6 +4,7 @@
 
 use super::read_measurement;
 use crate::asyncapi::types::RedfishBinding;
+use crate::payload::Raw;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -52,11 +53,13 @@ async fn repeated_reads_reuse_one_connection() {
         uri: "/Chassis/1/Power".to_string(),
         json_pointer: Some("/v".to_string()),
         scale: 1.0,
-        value_map: None,
     };
     // Act — five polls, as one poll task would make over five ticks
     for _ in 0..5 {
-        assert_eq!(read_measurement(&binding, None, None).await.unwrap(), 1.0);
+        assert_eq!(
+            read_measurement(&binding, None, None).await.unwrap(),
+            Raw::Number(1.0)
+        );
     }
     // Assert
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
@@ -74,7 +77,7 @@ async fn scale_converts_the_raw_reading_to_the_declared_unit() {
     // Act
     let hz = read_measurement(&binding, None, None).await.unwrap();
     // Assert
-    assert_eq!(hz, 1_000_000.0);
+    assert_eq!(hz, Raw::Number(1_000_000.0));
 }
 
 #[test]
@@ -87,45 +90,18 @@ fn absent_scale_is_one() {
     assert_eq!(binding.scale, 1.0);
 }
 
-fn pump_state(port: u16, value_map: Option<serde_json::Value>) -> RedfishBinding {
-    serde_json::from_value(serde_json::json!({
+#[tokio::test]
+async fn a_text_reading_comes_back_as_text() {
+    // Arrange — Redfish reports pump state as text; turning it into our label
+    // is the measurement's value_map, applied when it's published (payload)
+    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Enabled"}}]}"#).await;
+    let binding: RedfishBinding = serde_json::from_value(serde_json::json!({
         "host": "127.0.0.1", "port": port, "uri": "/Chassis/CDU/Pumps",
-        "json_pointer": "/Members/0/Status/State", "value_map": value_map,
+        "json_pointer": "/Members/0/Status/State",
     }))
-    .unwrap()
-}
-
-#[tokio::test]
-async fn a_text_reading_maps_to_its_number() {
-    // Arrange — Redfish reports pump state as text
-    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Enabled"}}]}"#).await;
-    let map = serde_json::json!({ "Enabled": 1, "Disabled": 0, "UnavailableOffline": 2 });
+    .unwrap();
     // Act
-    let state = read_measurement(&pump_state(port, Some(map)), None, None)
-        .await
-        .unwrap();
+    let state = read_measurement(&binding, None, None).await.unwrap();
     // Assert
-    assert_eq!(state, 1.0);
-}
-
-#[tokio::test]
-async fn a_text_reading_not_in_the_map_is_an_error() {
-    // An unmapped state must not publish as some guessed number
-    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Quiesced"}}]}"#).await;
-    let map = serde_json::json!({ "Enabled": 1 });
-    assert!(
-        read_measurement(&pump_state(port, Some(map)), None, None)
-            .await
-            .is_err()
-    );
-}
-
-#[tokio::test]
-async fn a_text_reading_without_a_map_is_an_error() {
-    let (port, _) = serve(r#"{"Members":[{"Status":{"State":"Enabled"}}]}"#).await;
-    assert!(
-        read_measurement(&pump_state(port, None), None, None)
-            .await
-            .is_err()
-    );
+    assert_eq!(state, Raw::Text("Enabled".to_string()));
 }

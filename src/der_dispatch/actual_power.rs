@@ -14,7 +14,7 @@
 //! all. Open question for a real schema-level aggregation mode, tracked with
 //! power-engineer — not blocking, since this works today regardless.
 
-use crate::synthetic::InputCache;
+use crate::synthetic::{InputCache, as_number};
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
 use std::time::Duration;
@@ -84,7 +84,7 @@ fn sum_cached(topics: &[String], cache: &InputCache) -> Option<f64> {
     }
     let mut total = 0.0;
     for topic in topics {
-        total += cache.get(topic)?.0;
+        total += as_number(&cache.get(topic)?.0)?;
     }
     Some(total)
 }

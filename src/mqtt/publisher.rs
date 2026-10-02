@@ -79,6 +79,20 @@ fn classify_connect_error(e: &paho_mqtt::Error) -> anyhow::Error {
     }
 }
 
+/// Publish an already-shaped `{ts, value}` sample (see `payload`) at QoS 1.
+pub async fn publish_sample(
+    client: &AsyncClient,
+    topic: &str,
+    sample: &serde_json::Value,
+) -> Result<()> {
+    let payload = serde_json::to_vec(sample).context("serialize sample")?;
+    client
+        .publish(Message::new(topic, payload, 1))
+        .await
+        .context("mqtt publish")?;
+    Ok(())
+}
+
 /// Publish a FloatSample at QoS 1 to the given topic.
 pub async fn publish_measurement(client: &AsyncClient, topic: &str, value: f64) -> Result<()> {
     let sample = FloatSample {

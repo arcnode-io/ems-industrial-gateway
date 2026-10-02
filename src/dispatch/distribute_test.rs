@@ -3,6 +3,7 @@
 use super::*;
 use crate::asyncapi::types::ChildAllocation;
 use crate::synthetic::new_input_cache;
+use serde_json::json;
 use std::time::Instant;
 
 #[test]
@@ -12,11 +13,11 @@ fn resolve_child_substitutes_site_id_before_cache_lookup() {
     let cache = new_input_cache();
     cache.insert(
         "sites/site_001/devices/rack_1/measurements/operating_state/none".into(),
-        (0.0, Instant::now()),
+        (json!(0.0), Instant::now()),
     );
     cache.insert(
         "sites/site_001/devices/rack_1/measurements/state_of_charge/percent".into(),
-        (65.0, Instant::now()),
+        (json!(65.0), Instant::now()),
     );
     let child = ChildAllocation {
         device_id: "rack_1".to_string(),
@@ -48,6 +49,21 @@ fn operating_state_from_f64_maps_all_five_values() {
 }
 
 #[test]
+fn operating_state_reads_our_labels() {
+    // Typed publishing sends the state as its template label, not a code
+    for (label, expected) in [
+        ("STANDBY", OperatingState::Standby),
+        ("CHARGING", OperatingState::Charging),
+        ("DISCHARGING", OperatingState::Discharging),
+        ("FAULT", OperatingState::Fault),
+        ("OFFLINE", OperatingState::Offline),
+    ] {
+        assert_eq!(operating_state(&json!(label)).unwrap(), expected);
+    }
+    assert!(operating_state(&json!("ON_FIRE")).is_err());
+}
+
+#[test]
 fn operating_state_from_f64_rejects_out_of_range() {
     assert!(operating_state_from_f64(5.0).is_err());
 }
@@ -59,11 +75,11 @@ fn compute_shares_splits_equally_across_two_standby_children() {
     for rack in ["rack_1", "rack_2"] {
         cache.insert(
             format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
-            (0.0, Instant::now()),
+            (json!(0.0), Instant::now()),
         );
         cache.insert(
             format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
-            (50.0, Instant::now()),
+            (json!(50.0), Instant::now()),
         );
     }
     let child = |id: &str| ChildAllocation {
@@ -110,11 +126,11 @@ fn floored_pair(soc_1: f64, soc_2: f64) -> (DistributeBinding, InputCache) {
     for (rack, soc) in [("rack_1", soc_1), ("rack_2", soc_2)] {
         cache.insert(
             format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
-            (0.0, Instant::now()),
+            (json!(0.0), Instant::now()),
         );
         cache.insert(
             format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
-            (soc, Instant::now()),
+            (json!(soc), Instant::now()),
         );
     }
     let child = |id: &str| ChildAllocation {

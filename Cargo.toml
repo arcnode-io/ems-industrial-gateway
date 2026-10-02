@@ -39,6 +39,7 @@ dashmap = "6.1.0"
 aws-config = { version = "1.8.18", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-cloudformation = { version = "1.117.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-secretsmanager = { version = "1.108.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
+jsonschema = { version = "0.58.4", default-features = false }
 
 [dev-dependencies]
 axum = "0.8"

@@ -15,7 +15,7 @@ use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
 use crate::envelope::writes::WriteState;
-use crate::synthetic::InputCache;
+use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -103,7 +103,8 @@ async fn tick_once(
     let target = match &cfg.guard {
         Some(guard) => {
             let active_power_topic = guard.active_power_topic.replace("{site_id}", site_id);
-            let Some(active_power) = cache.get(&active_power_topic).map(|e| e.0) else {
+            let Some(active_power) = cache.get(&active_power_topic).and_then(|e| as_number(&e.0))
+            else {
                 return; // hold — no active_power reading cached yet
             };
             // With a POI meter configured but no reading yet, hold: falling
@@ -112,7 +113,10 @@ async fn tick_once(
             let poi_active_power = match &guard.poi_active_power_topic {
                 Some(topic) => {
                     let topic = topic.replace("{site_id}", site_id);
-                    let Some((p_poi, received_at)) = cache.get(&topic).map(|e| *e) else {
+                    let Some((p_poi, received_at)) = cache
+                        .get(&topic)
+                        .and_then(|e| Some((as_number(&e.0)?, e.1)))
+                    else {
                         return; // hold — no POI reading cached yet
                     };
                     Some((p_poi, received_at))
@@ -121,8 +125,8 @@ async fn tick_once(
             };
             let import_limit_topic = guard.import_limit_topic.replace("{site_id}", site_id);
             let export_limit_topic = guard.export_limit_topic.replace("{site_id}", site_id);
-            let import_limit = cache.get(&import_limit_topic).map(|e| e.0);
-            let export_limit = cache.get(&export_limit_topic).map(|e| e.0);
+            let import_limit = cache.get(&import_limit_topic).and_then(|e| as_number(&e.0));
+            let export_limit = cache.get(&export_limit_topic).and_then(|e| as_number(&e.0));
             let (poi_fresh, hold_approach) = match poi_active_power {
                 Some((_, received_at)) => writes.gate.take(received_at),
                 None => (true, false),

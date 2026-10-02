@@ -6,8 +6,9 @@ use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::allocation::{self, AllocationPolicy, ChildCapacity, OperatingState};
 use crate::modbus::client as modbus;
-use crate::synthetic::InputCache;
+use crate::synthetic::{InputCache, as_number};
 use anyhow::{Context, Result, anyhow};
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Resolve + execute a distribute command: `compute_shares` then
@@ -98,14 +99,13 @@ fn resolve_child(
 ) -> Result<ChildCapacity> {
     let operating_state_topic = c.operating_state_topic.replace("{site_id}", site_id);
     let state_of_charge_topic = c.state_of_charge_topic.replace("{site_id}", site_id);
-    let raw_state = cache
+    let operating_state = cache
         .get(&operating_state_topic)
-        .map(|e| e.0)
-        .ok_or_else(|| anyhow!("no cached operating_state for {}", c.device_id))?;
-    let operating_state = operating_state_from_f64(raw_state)?;
+        .map(|e| operating_state(&e.0))
+        .ok_or_else(|| anyhow!("no cached operating_state for {}", c.device_id))??;
     let state_of_charge = cache
         .get(&state_of_charge_topic)
-        .map(|e| e.0)
+        .and_then(|e| as_number(&e.0))
         .ok_or_else(|| anyhow!("no cached state_of_charge for {}", c.device_id))?;
     let headroom = if target < 0.0 {
         c.power_min.abs()
@@ -140,6 +140,22 @@ fn apply_reserve_floor(
             ..child
         },
         _ => child,
+    }
+}
+
+/// A cached `operating_state` as its enum: our label (`"FAULT"`) as typed
+/// publishing sends it, or the register code a number-only publish sends.
+fn operating_state(value: &Value) -> Result<OperatingState> {
+    match value.as_str() {
+        Some("STANDBY") => Ok(OperatingState::Standby),
+        Some("CHARGING") => Ok(OperatingState::Charging),
+        Some("DISCHARGING") => Ok(OperatingState::Discharging),
+        Some("FAULT") => Ok(OperatingState::Fault),
+        Some("OFFLINE") => Ok(OperatingState::Offline),
+        Some(other) => Err(anyhow!("unknown operating_state label: {other}")),
+        None => operating_state_from_f64(
+            as_number(value).ok_or_else(|| anyhow!("operating_state is {value}"))?,
+        ),
     }
 }
 
