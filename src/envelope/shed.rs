@@ -35,6 +35,7 @@ pub struct ShedTick {
 
 /// Fleet cap state across ticks.
 pub struct ShedController {
+    /// Dwell, margin and ramp, shared with the BESS envelope guard.
     config: EnvelopeConfig,
     /// Current fleet cap, whole percent; `None` before the first tick.
     percent: Option<f64>,

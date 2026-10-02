@@ -16,6 +16,7 @@ use crate::config::{Config, GatewayCredentials};
 use crate::der_dispatch;
 use crate::dispatch;
 use crate::envelope;
+use crate::envelope::shed_task::{self, ShedTaskConfig};
 use crate::http::client::fetch_asyncapi;
 use crate::inputs;
 use crate::mqtt::{publisher, subscriber};
@@ -271,6 +272,28 @@ fn spawn_task_set(
     }
     for (device_id, commands) in &spec.x_command_source {
         for source in commands.values() {
+            if let ProtocolBinding::PowerCap(p) = &source.binding {
+                let key = format!("{}_{}", source.verb, source.target);
+                let creds = cfg.gateway_credentials.clone();
+                // Guarded only when the DTM enabled compute shedding.
+                if let Some(c) =
+                    ShedTaskConfig::from_binding(device_id, &key, p, &cfg.site_id, creds)
+                {
+                    let devices = (device_channels.clone(), device_trust.clone());
+                    let h = shed_task::spawn(
+                        c,
+                        cache.clone(),
+                        last_requested.clone(),
+                        devices,
+                        parent.child_token(),
+                    );
+                    handles.spawn(async move {
+                        let _ = h.await;
+                    });
+                    info!(%device_id, %key, "compute shed task spawned");
+                }
+                continue;
+            }
             let ProtocolBinding::Distribute(d) = &source.binding else {
                 continue;
             };

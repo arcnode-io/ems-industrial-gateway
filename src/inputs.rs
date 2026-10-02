@@ -69,6 +69,20 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                     }
                 }
             }
+            // A guarded power cap (compute shed) reads the same envelope.
+            if let ProtocolBinding::PowerCap(p) = &source.binding {
+                let guard = [
+                    &p.import_limit_topic,
+                    &p.export_limit_topic,
+                    &p.poi_active_power_topic,
+                ];
+                topics.extend(
+                    guard
+                        .into_iter()
+                        .flatten()
+                        .map(|t| substitute_site_id(t, site_id)),
+                );
+            }
         }
     }
     topics.into_iter().collect()

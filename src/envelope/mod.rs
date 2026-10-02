@@ -21,6 +21,7 @@ pub mod poi_servo;
 #[cfg(test)]
 mod poi_servo_test;
 pub mod shed;
+pub mod shed_task;
 pub mod task;
 pub mod writes;
 
