@@ -20,6 +20,7 @@ mod poi_gate_test;
 pub mod poi_servo;
 #[cfg(test)]
 mod poi_servo_test;
+pub mod shed;
 pub mod task;
 pub mod writes;
 
