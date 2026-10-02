@@ -39,6 +39,7 @@ use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::modbus::client as modbus;
+use crate::redfish;
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result, anyhow};
 use paho_mqtt::AsyncClient;
@@ -224,6 +225,10 @@ pub(crate) async fn execute_setpoint(
         ProtocolBinding::ModbusTcp(b) => {
             let trust = device_trust.get(device_id);
             modbus::write_setpoint(b, value, trust, creds).await
+        }
+        ProtocolBinding::Redfish(b) => {
+            let trust = device_trust.get(device_id);
+            redfish::write::write_setpoint(b, value, trust, creds).await
         }
         ProtocolBinding::Distribute(d) => {
             distribute::dispatch_distribute(

@@ -30,3 +30,45 @@ fn command_frame_requires_command_id() {
     // Act + Assert
     assert!(serde_json::from_slice::<CommandFrame>(bad).is_err());
 }
+
+#[tokio::test]
+async fn a_redfish_setpoint_is_written_to_the_bmc() {
+    use super::execute_setpoint;
+    use crate::asyncapi::types::ProtocolBinding;
+    use crate::synthetic::new_input_cache;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use wiremock::matchers::{body_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    // Arrange — a GPU's power limit, as gpu_node's command binds it
+    let bmc = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(body_json(
+            json!({ "PowerLimitWatts": { "SetPoint": 810.0 } }),
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&bmc)
+        .await;
+    let binding: ProtocolBinding = serde_json::from_value(json!({
+        "protocol": "redfish", "host": "127.0.0.1", "port": bmc.address().port(),
+        "uri": "/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1/EnvironmentMetrics",
+        "json_pointer": "/PowerLimitWatts/SetPoint",
+    }))
+    .unwrap();
+    // Act
+    let written = execute_setpoint(
+        &binding,
+        810.0,
+        "gpu_node_01",
+        "set_gpu_1_power_limit",
+        "s",
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        &new_input_cache(),
+    )
+    .await;
+    // Assert
+    assert!(written.is_ok(), "{written:?}");
+}

@@ -74,7 +74,7 @@ pub fn extract(body: &Value, b: &RedfishBinding) -> Result<Raw> {
 /// Reason: a `Client` pools connections, so building one per read opened a
 /// new TCP connection per poll. At ~100 BMCs polled every second, the closed
 /// ones pile up in TIME-WAIT and exhaust the host's ephemeral ports.
-fn plain_client() -> Result<Client> {
+pub(super) fn plain_client() -> Result<Client> {
     static PLAIN: OnceLock<Client> = OnceLock::new();
     if let Some(client) = PLAIN.get() {
         return Ok(client.clone());
@@ -89,7 +89,7 @@ fn plain_client() -> Result<Client> {
 /// HTTPS+mTLS client, cached per credential set (keyed by its three paths)
 /// so a process can never reuse a client built with a different identity.
 /// Also avoids re-reading the cert files and a full TLS handshake per poll.
-fn https_client(creds: &GatewayCredentials) -> Result<Client> {
+pub(super) fn https_client(creds: &GatewayCredentials) -> Result<Client> {
     type CredsKey = (PathBuf, PathBuf, PathBuf);
     static MTLS: LazyLock<Mutex<HashMap<CredsKey, Client>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
