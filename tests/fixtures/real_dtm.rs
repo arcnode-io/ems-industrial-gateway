@@ -1,8 +1,8 @@
 //! Builds a real DTM POST body for `bess_module_1` + 2 `bess_rack` children +
-//! `operating_envelope`, using the real edp-api templates transcribed into
-//! `bess_templates.json` (edp-api@0fe1856). Shared by any e2e test that
-//! needs a real device-api container resolving real production template
-//! content, rather than a hand-rolled AsyncAPI stub.
+//! `operating_envelope`, using the template catalog the device-api image
+//! ships (see `catalog::shipped_catalog`). Shared by any e2e test that needs
+//! a real device-api container resolving real production template content,
+//! rather than a hand-rolled AsyncAPI stub.
 
 use serde_json::{Map, Value, json};
 
@@ -32,7 +32,7 @@ fn device(
 /// device to exist and have a host/port for its dnp3_tcp binding to
 /// deserialize on the gateway side, but no outstation needs to answer since
 /// import/export limit are driven by direct MQTT publish in the test).
-pub fn bess_dtm(rack1_port: u16, rack2_port: u16) -> Value {
+pub fn bess_dtm(catalog: &Map<String, Value>, rack1_port: u16, rack2_port: u16) -> Value {
     let mut devices = Map::new();
     devices.insert(
         MODULE_ID.to_string(),
@@ -73,8 +73,13 @@ pub fn bess_dtm(rack1_port: u16, rack2_port: u16) -> Value {
         ),
     );
 
-    let templates: Value = serde_json::from_str(include_str!("bess_templates.json"))
-        .expect("bess_templates.json parses");
+    let templates: Map<String, Value> = devices
+        .values()
+        .map(|d| {
+            let slug = d["template"].as_str().expect("device has a template");
+            (slug.to_string(), catalog[slug].clone())
+        })
+        .collect();
     json!({
         "deployment_uuid": "22222222-2222-4222-8222-222222222222",
         "sizing_params": { "P_compute_total_kW": 100, "E_BESS_total_kWh": 8000, "T_coolant_setpoint_C": 18 },

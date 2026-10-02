@@ -11,6 +11,7 @@ mod fixtures;
 use anyhow::Result;
 use ems_industrial_gateway::modbus::client::{WordOrder, decode_int32, read_holding};
 use ems_industrial_gateway::{app, config::Config};
+use fixtures::catalog::shipped_catalog;
 use fixtures::containers::{
     start_device_api, start_hivemq, start_mock_modbus_server_writable, start_postgres,
 };
@@ -62,7 +63,11 @@ async fn discharge_withheld_from_rack_at_reserve_floor() -> Result<()> {
         .await?
         .error_for_status()?;
 
-    let mut dtm = bess_dtm(rack1_modbus, rack2_modbus);
+    let mut dtm = bess_dtm(
+        &shipped_catalog(&device_api).await?,
+        rack1_modbus,
+        rack2_modbus,
+    );
     dtm["sizing_params"]["bess_reserve_floor_mwh"] = json!(RESERVE_FLOOR_MWH);
     reqwest::Client::new()
         .post(format!("{device_api_url}/topology"))

@@ -4,17 +4,16 @@
 //!
 //! Distinct from distribute_test.rs/envelope_test.rs, which hand-roll an
 //! AsyncAPI stub to isolate the allocation/control-law wiring. This test
-//! proves the templates themselves (tests/fixtures/bess_templates.json,
-//! transcribed from edp-api's real device_templates/{leaf/bess_rack,
-//! module/bess_module}.yaml as of edp-api@0fe1856) pass device-api's Zod
-//! validation and resolve to the same shape those focused tests assume —
-//! the "real device-api-container pass" per handoff-envelope-control-law.
+//! proves the templates the device-api image ships (bess_rack, bess_module)
+//! pass its validation and resolve to the same shape those focused tests
+//! assume.
 
 mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::modbus::client::{WordOrder, decode_int32, read_holding};
 use ems_industrial_gateway::{app, config::Config};
+use fixtures::catalog::shipped_catalog;
 use fixtures::containers::{
     start_device_api, start_hivemq, start_mock_modbus_server_writable, start_postgres,
 };
@@ -65,7 +64,11 @@ async fn real_templates_resolve_and_distribute_soc_weighted_write() -> Result<()
     seed_rack(rack1_control, 700).await?;
     seed_rack(rack2_control, 300).await?;
 
-    let dtm = bess_dtm(rack1_modbus, rack2_modbus);
+    let dtm = bess_dtm(
+        &shipped_catalog(&device_api).await?,
+        rack1_modbus,
+        rack2_modbus,
+    );
     let device_api_url = format!("http://localhost:{device_api_port}");
     let resp = reqwest::Client::new()
         .post(format!("{device_api_url}/topology"))
