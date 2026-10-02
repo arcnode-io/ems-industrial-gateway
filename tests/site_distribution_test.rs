@@ -10,12 +10,13 @@ mod fixtures;
 use anyhow::Result;
 use ems_industrial_gateway::modbus::client::{WordOrder, decode_int32, read_holding};
 use ems_industrial_gateway::{app, config::Config};
-use fixtures::containers::{start_hivemq, start_mock_modbus_server_writable};
+use fixtures::containers::{start_ems_hivemq_with_credentials, start_mock_modbus_server_writable};
 use fixtures::spec_stub::spawn_asyncapi_stub;
 use futures::stream::StreamExt;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, Message};
 use serde_json::json;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -65,6 +66,23 @@ fn module_command_entry(rack: &str) -> serde_json::Value {
     })
 }
 
+/// Connect as one of the broker's RBAC identities (tests/fixtures/credentials.xml).
+async fn connect_as(broker_url: &str, client_id: &str, user: &str) -> Result<AsyncClient> {
+    let client = AsyncClient::new(
+        CreateOptionsBuilder::new()
+            .server_uri(broker_url)
+            .client_id(client_id)
+            .finalize(),
+    )?;
+    let opts = ConnectOptionsBuilder::new()
+        .clean_session(true)
+        .user_name(user)
+        .password("test")
+        .finalize();
+    client.connect(opts).await?;
+    Ok(client)
+}
+
 async fn read_rack_watts(port: u16) -> Result<i32> {
     let words = read_holding("127.0.0.1", port, 1, REGISTER_ADDR, 2).await?;
     Ok(decode_int32(&words, WordOrder::HighLow))
@@ -73,9 +91,10 @@ async fn read_rack_watts(port: u16) -> Result<i32> {
 #[tokio::test]
 async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks() -> Result<()> {
     init_tracing();
-    // Arrange — hivemq + two writable mock-modbus racks (one per module).
-    let network = fixtures::containers::unique_network();
-    let hivemq = start_hivemq(&network).await?;
+    // Arrange — the RBAC broker the product ships + two writable racks
+    let credentials =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/credentials.xml");
+    let hivemq = start_ems_hivemq_with_credentials(&credentials).await?;
     let hivemq_port = hivemq.get_host_port_ipv4(1883).await?;
     let rack1 = start_mock_modbus_server_writable().await?;
     let rack1_port = rack1.get_host_port_ipv4(502).await?;
@@ -116,6 +135,11 @@ async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks()
     fixtures::readiness::wait_for_gateway_ready(&broker_url, SITE_ID, &[MODULE_1, MODULE_2])
         .await?;
 
+    // Each input comes from the identity that publishes it in production:
+    // the gateway's own measurements, der-control-api's dispatch; the
+    // operator only watches events.
+    let feed = connect_as(&broker_url, "site-dist-test-feed", "arcnode_gateway").await?;
+    let der = connect_as(&broker_url, "site-dist-test-der", "arcnode_der_control_api").await?;
     let mut operator = AsyncClient::new(
         CreateOptionsBuilder::new()
             .server_uri(&broker_url)
@@ -124,7 +148,13 @@ async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks()
     )?;
     let mut events = operator.get_stream(64);
     operator
-        .connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
+        .connect(
+            ConnectOptionsBuilder::new()
+                .clean_session(true)
+                .user_name("arcnode_operator")
+                .password("test")
+                .finalize(),
+        )
         .await?;
     operator
         .subscribe(
@@ -136,53 +166,47 @@ async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks()
     // Arrange — each rack STANDBY (its own module's distribute needs this);
     // module_1 at 70% SoC, module_2 at 30% -> site split should be 70/30.
     for rack in [RACK_1, RACK_2] {
-        operator
-            .publish(Message::new(
-                format!("sites/{SITE_ID}/devices/{rack}/measurements/operating_state/none"),
-                r#"{"ts":"t","value":0}"#,
-                0,
-            ))
-            .await?;
-        operator
-            .publish(Message::new(
-                format!("sites/{SITE_ID}/devices/{rack}/measurements/state_of_charge/percent"),
-                r#"{"ts":"t","value":50.0}"#,
-                0,
-            ))
-            .await?;
+        feed.publish(Message::new(
+            format!("sites/{SITE_ID}/devices/{rack}/measurements/operating_state/none"),
+            r#"{"ts":"t","value":0}"#,
+            0,
+        ))
+        .await?;
+        feed.publish(Message::new(
+            format!("sites/{SITE_ID}/devices/{rack}/measurements/state_of_charge/percent"),
+            r#"{"ts":"t","value":50.0}"#,
+            0,
+        ))
+        .await?;
     }
-    operator
-        .publish(Message::new(
-            format!("sites/{SITE_ID}/devices/{MODULE_1}/measurements/state_of_charge/percent"),
-            r#"{"ts":"t","value":70.0}"#,
-            0,
-        ))
-        .await?;
-    operator
-        .publish(Message::new(
-            format!("sites/{SITE_ID}/devices/{MODULE_2}/measurements/state_of_charge/percent"),
-            r#"{"ts":"t","value":30.0}"#,
-            0,
-        ))
-        .await?;
+    feed.publish(Message::new(
+        format!("sites/{SITE_ID}/devices/{MODULE_1}/measurements/state_of_charge/percent"),
+        r#"{"ts":"t","value":70.0}"#,
+        0,
+    ))
+    .await?;
+    feed.publish(Message::new(
+        format!("sites/{SITE_ID}/devices/{MODULE_2}/measurements/state_of_charge/percent"),
+        r#"{"ts":"t","value":30.0}"#,
+        0,
+    ))
+    .await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Act — der_dispatch goes active with a 400kW site target. No command
     // topic involved: this is the reactive/tick trigger, not handle_command.
-    operator
-        .publish(Message::new(
-            format!("sites/{SITE_ID}/devices/der_dispatch/measurements/event_active/none"),
-            r#"{"ts":"t","value":true}"#,
-            0,
-        ))
-        .await?;
-    operator
-        .publish(Message::new(
-            format!("sites/{SITE_ID}/devices/der_dispatch/measurements/target_active_power/watts"),
-            r#"{"ts":"t","value":400000.0}"#,
-            0,
-        ))
-        .await?;
+    der.publish(Message::new(
+        format!("sites/{SITE_ID}/devices/der_dispatch/measurements/event_active/none"),
+        r#"{"ts":"t","value":true}"#,
+        0,
+    ))
+    .await?;
+    der.publish(Message::new(
+        format!("sites/{SITE_ID}/devices/der_dispatch/measurements/target_active_power/watts"),
+        r#"{"ts":"t","value":400000.0}"#,
+        0,
+    ))
+    .await?;
 
     // Assert — soc_weighted(70/30) of 400kW = 280k to module_1's rack,
     // 120k to module_2's rack, cascaded through each module's own

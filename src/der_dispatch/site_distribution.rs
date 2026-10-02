@@ -1,7 +1,9 @@
 //! Site→module distribution: splits der_dispatch's `target_active_power`
-//! across whatever `bess_module` devices exist, dispatched as real MQTT
-//! commands — same pipeline as an operator's own command, so each module's
+//! across whatever `bess_module` devices exist, each share handed to the
+//! same command handler an operator's command goes through, so each module's
 //! existing rebalance-to-racks machinery does its normal job underneath.
+//! In-process, not via the broker: commands are the operator's to publish,
+//! and the gateway's broker identity can't.
 //! No new schema anywhere: eligibility comes from each module's own already-
 //! resolved Distribute binding (power_min/power_max), weighting from its
 //! own already-published state_of_charge.
@@ -9,7 +11,7 @@
 //! Hybrid trigger, same as module→rack: one tick both reacts to
 //! target_active_power/event_active changing (poll cadence fast enough to
 //! read as immediate) and rebalances on module SoC drift alone. Holds (no
-//! publish) while event_active, the target or any module's own state hasn't
+//! dispatch) while event_active, the target or any module's own state hasn't
 //! landed in cache yet, or nothing's changed since the last dispatch.
 //!
 //! An event that ENDS is not a hold. The modules keep whatever setpoint was
@@ -18,25 +20,19 @@
 //! dispatched is commanded back to its pre-event operator setpoint (0 if
 //! none), unless an operator commanded it mid-event. See `event_memory`.
 
-use crate::asyncapi::types::ProtocolBinding;
+use crate::config::GatewayCredentials;
 use crate::der_dispatch::SharedEventMemory;
 use crate::der_dispatch::module_bounds::modules_with_bounds;
+use crate::der_dispatch::module_command::{Devices, dispatch_one};
 use crate::dispatch::LastRequestedSetpoints;
 use crate::dispatch::allocation::{self, AllocationPolicy};
 use crate::synthetic::{InputCache, as_number};
-use chrono::Utc;
-use paho_mqtt::{AsyncClient, Message};
+use paho_mqtt::AsyncClient;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
-/// QoS for the commands this task publishes — matches every other commands/
-/// topic (ADR-002 §11, at-least-once).
-const COMMAND_QOS: i32 = 1;
 /// The verb+target every bess_module command shares — site distribution is
 /// specifically about active power, same scope as Phase III overall.
 pub(super) const CHANNEL_KEY: &str = "set_active_power";
@@ -51,6 +47,8 @@ pub struct SiteDistributionConfig {
     pub event_active_topic: String,
     /// Tick cadence — matches the module rebalance task's (1 Hz).
     pub tick_hz: f64,
+    /// mTLS material for the south-side writes each command ends in.
+    pub creds: Option<GatewayCredentials>,
 }
 
 /// Spawn the site-distribution loop. Mirrors `envelope::task::spawn`'s
@@ -60,7 +58,7 @@ pub fn spawn(
     cfg: SiteDistributionConfig,
     cache: InputCache,
     mqtt: AsyncClient,
-    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+    devices: Devices,
     last_requested: LastRequestedSetpoints,
     memory: SharedEventMemory,
     cancel: CancellationToken,
@@ -72,7 +70,7 @@ pub fn spawn(
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    tick_once(&cfg, &cache, &mqtt, &device_channels, &last_requested, &memory).await;
+                    tick_once(&cfg, &cache, &mqtt, &devices, &last_requested, &memory).await;
                 }
             }
         }
@@ -92,9 +90,12 @@ async fn operator_setpoints(last_requested: &LastRequestedSetpoints) -> HashMap<
 /// Event over: command each module the event dispatched back to its
 /// pre-event setpoint. Memory is cleared only once every restore publishes,
 /// so a failed publish is retried next tick rather than lost.
+#[allow(clippy::too_many_arguments)]
 async fn release(
     cfg: &SiteDistributionConfig,
+    cache: &InputCache,
     mqtt: &AsyncClient,
+    devices: &Devices,
     last_requested: &LastRequestedSetpoints,
     memory: &SharedEventMemory,
 ) {
@@ -102,7 +103,16 @@ async fn release(
     let restore = memory.lock().unwrap().end(&current);
     let mut all_published = true;
     for (module_id, setpoint) in restore {
-        all_published &= dispatch_one(mqtt, &cfg.site_id, &module_id, setpoint).await;
+        all_published &= dispatch_one(
+            cfg,
+            cache,
+            mqtt,
+            devices,
+            last_requested,
+            &module_id,
+            setpoint,
+        )
+        .await;
     }
     if all_published {
         memory.lock().unwrap().clear();
@@ -116,7 +126,7 @@ async fn tick_once(
     cfg: &SiteDistributionConfig,
     cache: &InputCache,
     mqtt: &AsyncClient,
-    device_channels: &Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+    devices: &Devices,
     last_requested: &LastRequestedSetpoints,
     memory: &SharedEventMemory,
 ) {
@@ -127,7 +137,7 @@ async fn tick_once(
         return; // hold — event_active not cached yet
     };
     if event_active < 0.5 {
-        release(cfg, mqtt, last_requested, memory).await;
+        release(cfg, cache, mqtt, devices, last_requested, memory).await;
         return;
     }
     let operator = operator_setpoints(last_requested).await;
@@ -136,7 +146,7 @@ async fn tick_once(
         return; // hold — target not cached yet
     };
 
-    let channels = device_channels.read().await;
+    let channels = devices.channels.read().await;
     let Some(modules) = modules_with_bounds(&channels, cache, &cfg.site_id, target) else {
         return; // hold — no modules known, or any module's state not yet cached
     };
@@ -148,32 +158,8 @@ async fn tick_once(
     let shares = allocation::allocate(target, &modules, AllocationPolicy::SocWeighted);
     let changed = memory.lock().unwrap().changed(shares);
     for (module_id, share) in changed {
-        if dispatch_one(mqtt, &cfg.site_id, &module_id, share).await {
+        if dispatch_one(cfg, cache, mqtt, devices, last_requested, &module_id, share).await {
             memory.lock().unwrap().record(&module_id, share);
-        }
-    }
-}
-
-/// Publish one real command message to `module_id`, exactly as an operator
-/// would — `handle_command` takes it from there (acks, last_requested
-/// capture, the module's own rebalance-to-racks machinery). Returns whether
-/// the publish itself succeeded.
-async fn dispatch_one(mqtt: &AsyncClient, site_id: &str, module_id: &str, share: f64) -> bool {
-    let topic = format!("sites/{site_id}/devices/{module_id}/commands/set/active_power/watts");
-    let command_id = format!(
-        "site-dist-{}",
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
-    let payload = format!(
-        r#"{{"ts":"{ts}","value":{share},"command_id":"{command_id}"}}"#,
-        ts = Utc::now().to_rfc3339(),
-    );
-    let msg = Message::new(topic.clone(), payload, COMMAND_QOS);
-    match mqtt.publish(msg).await {
-        Ok(()) => true,
-        Err(err) => {
-            warn!(%topic, error = %err, "site distribution command publish failed");
-            false
         }
     }
 }

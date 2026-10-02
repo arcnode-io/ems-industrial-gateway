@@ -36,8 +36,17 @@ pub async fn wait_for_gateway_ready(
             .finalize(),
     )?;
     let mut stream = probe.get_stream(16);
+    // Reason: the probe publishes measurements, so on an RBAC broker it
+    // needs the gateway identity (tests/fixtures/credentials.xml); plain CE
+    // ignores credentials.
     probe
-        .connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
+        .connect(
+            ConnectOptionsBuilder::new()
+                .clean_session(true)
+                .user_name("arcnode_gateway")
+                .password("test")
+                .finalize(),
+        )
         .await?;
     probe
         .subscribe(

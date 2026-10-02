@@ -352,12 +352,16 @@ fn spawn_task_set(
             cfg.site_id
         ),
         tick_hz: DEFAULT_POLL_HZ,
+        creds: cfg.gateway_credentials.clone(),
     };
     let site_distribution_handle = der_dispatch::spawn_site_distribution(
         site_distribution_cfg,
         cache.clone(),
         client.clone(),
-        device_channels.clone(),
+        der_dispatch::Devices {
+            channels: device_channels.clone(),
+            trust: device_trust.clone(),
+        },
         last_requested.clone(),
         site_event,
         parent.child_token(),
