@@ -31,7 +31,7 @@ async fn connects_with_arcnode_gateway_and_publishes_to_measurements() -> Result
     // Assert — publish to measurements ACL'd topic resolves cleanly.
     publisher::publish_measurement(
         &client,
-        "sites/site_001/devices/dev_a/measurements/active_power/watts",
+        "sites/local_site/devices/dev_a/measurements/active_power/watts",
         12_345.0,
     )
     .await?;
@@ -89,7 +89,7 @@ async fn publish_to_commands_topic_is_rejected_by_acl() -> Result<()> {
     // Publish to commands/* — gateway role does NOT have PUBLISH on this branch.
     // Plugin disconnects the client; subsequent ops must observe the disconnect.
     let msg = Message::new(
-        "sites/site_001/devices/dev_a/commands/set/active_power/watts",
+        "sites/local_site/devices/dev_a/commands/set/active_power/watts",
         r#"{"value":1.0}"#,
         1,
     );

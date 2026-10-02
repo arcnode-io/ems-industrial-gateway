@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 
 /// A synthetic `sum` over one input measurement of device `sensor`.
 fn total_of(input: &str) -> Value {

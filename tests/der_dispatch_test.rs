@@ -26,7 +26,7 @@ fn init_tracing() {
     });
 }
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const MODULE_ID: &str = "bess_module_1";
 
 #[tokio::test]

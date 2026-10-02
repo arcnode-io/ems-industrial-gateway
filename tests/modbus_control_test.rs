@@ -32,7 +32,7 @@ fn init_tracing() {
 }
 
 /// Site id used by both the test and the gateway when building MQTT topics.
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 /// Device id in the spec + MQTT topic.
 const DEVICE_ID: &str = "meter_01";
 /// Measurement name (ION9000 kwh_delivered: int64 at holding 3204-3207).

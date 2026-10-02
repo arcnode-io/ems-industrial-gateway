@@ -28,7 +28,7 @@ fn init_tracing() {
     });
 }
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const MODULE_ID: &str = "bess_module_1";
 const RACK_1: &str = "rack_1";
 const RACK_2: &str = "rack_2";

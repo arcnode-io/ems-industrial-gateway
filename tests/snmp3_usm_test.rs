@@ -28,7 +28,7 @@ fn init_tracing() {
     });
 }
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const DEVICE_ID: &str = "pdu_01";
 const MEASUREMENT: &str = "input_current";
 const UNIT: &str = "amps";

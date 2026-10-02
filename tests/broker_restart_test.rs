@@ -21,7 +21,7 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const BROKER_READY: &str = "Started TCP Listener on address 0.0.0.0 and on port 1883.";
 
 /// HiveMQ on a fixed host port, so a restarted container comes back where

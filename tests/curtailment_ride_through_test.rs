@@ -21,7 +21,7 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const MODULE: &str = "module_1";
 const RACK: &str = "rack_1";
 const GPU_NODE: &str = "gpu_node_01";

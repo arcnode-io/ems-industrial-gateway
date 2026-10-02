@@ -9,7 +9,7 @@ use crate::synthetic::new_input_cache;
 use std::collections::HashMap;
 use std::time::Instant;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 
 fn distribute_binding(power_min: f64, power_max: f64) -> ProtocolBinding {
     ProtocolBinding::Distribute(DistributeBinding {
@@ -48,7 +48,7 @@ fn discovers_modules_with_distribute_bindings_and_cached_soc() {
     // Arrange
     let cache = new_input_cache();
     cache.insert(
-        "sites/site_001/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
+        "sites/local_site/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
         (serde_json::json!(70.0), Instant::now()),
     );
     let mut commands = HashMap::new();
@@ -74,7 +74,7 @@ fn headroom_is_direction_dependent_on_target_sign() {
     // Arrange — charging (negative target) uses |power_min|, not power_max.
     let cache = new_input_cache();
     cache.insert(
-        "sites/site_001/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
+        "sites/local_site/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
         (serde_json::json!(50.0), Instant::now()),
     );
     let mut commands = HashMap::new();

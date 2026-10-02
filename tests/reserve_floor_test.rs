@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 /// bess_rack.yaml: commands.set_active_power.binding.address.
 const CMD_REGISTER: u16 = 50;
 /// 2 MWh reserve over two 4000 kWh racks = 25%.

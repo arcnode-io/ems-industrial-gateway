@@ -31,10 +31,10 @@ fn credentials_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/credentials.xml")
 }
 
-const SITE: &str = "site_001";
-const COMMAND_TOPIC: &str = "sites/site_001/devices/dev_known/commands/set/active_power/watts";
+const SITE: &str = "local_site";
+const COMMAND_TOPIC: &str = "sites/local_site/devices/dev_known/commands/set/active_power/watts";
 const GHOST_COMMAND_TOPIC: &str =
-    "sites/site_001/devices/dev_ghost/commands/set/active_power/watts";
+    "sites/local_site/devices/dev_ghost/commands/set/active_power/watts";
 
 /// Start a writable mock-modbus-server and build the `device_channels` map
 /// `dispatch::handle_command` needs: `dev_known.set_active_power` → a real
@@ -115,7 +115,7 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
         publisher::connect(&url, "dispatch-test-op", "arcnode_operator", "test").await?;
     let mut events_stream = operator.get_stream(64);
     operator
-        .subscribe("sites/site_001/devices/+/events/dispatch_state", 1)
+        .subscribe("sites/local_site/devices/+/events/dispatch_state", 1)
         .await?;
 
     // Act — dispatch to a device with a real Modbus write binding.
@@ -187,7 +187,7 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
         publisher::connect(&url, "dispatch-test-op2", "arcnode_operator", "test").await?;
     let mut events_stream = operator.get_stream(64);
     operator
-        .subscribe("sites/site_001/devices/+/events/dispatch_state", 1)
+        .subscribe("sites/local_site/devices/+/events/dispatch_state", 1)
         .await?;
 
     // Act — no command_id: nothing to correlate an ack to.
@@ -243,7 +243,10 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
     tokio::time::sleep(Duration::from_millis(3000)).await;
     let mut events_stream = operator.get_stream(16);
     operator
-        .subscribe("sites/site_001/devices/dev_known/events/dispatch_state", 1)
+        .subscribe(
+            "sites/local_site/devices/dev_known/events/dispatch_state",
+            1,
+        )
         .await?;
     let acks = collect_events(&mut events_stream, 1).await?;
 

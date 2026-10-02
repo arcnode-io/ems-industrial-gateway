@@ -2,12 +2,21 @@ local:
   device_api_url: http://localhost:3000
   broker_url: tcp://localhost:1883
   mqtt_username: arcnode_gateway
-  site_id: site_001
+  site_id: local_site
   log_level: info
 
 beta:
   device_api_url: http://device-api:3000
   broker_url: tcp://hivemq:1883
   mqtt_username: arcnode_gateway
-  site_id: arcnode_beta
+  site_id: beta_site
+  log_level: info
+
+# The device demo: beta's container hostnames, under the site id every other
+# service's device-demo block uses, since every MQTT topic is keyed by it.
+device-demo:
+  device_api_url: http://device-api:3000
+  broker_url: tcp://hivemq:1883
+  mqtt_username: arcnode_gateway
+  site_id: device_demo_site
   log_level: info

@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 /// Readings on the one device, each its own URI.
 const READINGS: usize = 8;
 

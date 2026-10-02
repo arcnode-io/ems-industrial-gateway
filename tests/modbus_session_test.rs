@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 
 /// Holding registers 0-3 read 100-103; anything else is an illegal address.
 struct Meter;

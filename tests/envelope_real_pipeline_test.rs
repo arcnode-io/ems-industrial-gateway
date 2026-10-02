@@ -34,7 +34,7 @@ fn init_tracing() {
     });
 }
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 /// bess_rack.yaml: commands.set_active_power.binding.address.
 const CMD_REGISTER: u16 = 50;
 

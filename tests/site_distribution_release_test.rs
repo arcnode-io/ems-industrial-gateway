@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const MODULES: [&str; 2] = ["module_1", "module_2"];
 const RACKS: [&str; 2] = ["rack_1a", "rack_2a"];
 

@@ -12,11 +12,11 @@ fn resolve_child_substitutes_site_id_before_cache_lookup() {
     // matching what app.rs's subscription list actually caches under.
     let cache = new_input_cache();
     cache.insert(
-        "sites/site_001/devices/rack_1/measurements/operating_state/none".into(),
+        "sites/local_site/devices/rack_1/measurements/operating_state/none".into(),
         (json!(0.0), Instant::now()),
     );
     cache.insert(
-        "sites/site_001/devices/rack_1/measurements/state_of_charge/percent".into(),
+        "sites/local_site/devices/rack_1/measurements/state_of_charge/percent".into(),
         (json!(65.0), Instant::now()),
     );
     let child = ChildAllocation {
@@ -29,7 +29,7 @@ fn resolve_child_substitutes_site_id_before_cache_lookup() {
         power_max: 4_000_000.0,
     };
     // Act
-    let resolved = resolve_child(&child, 100.0, "site_001", &cache).unwrap();
+    let resolved = resolve_child(&child, 100.0, "local_site", &cache).unwrap();
     // Assert
     assert_eq!(resolved.operating_state, OperatingState::Standby);
     assert!((resolved.state_of_charge - 65.0).abs() < f64::EPSILON);
@@ -74,11 +74,11 @@ fn compute_shares_splits_equally_across_two_standby_children() {
     let cache = new_input_cache();
     for rack in ["rack_1", "rack_2"] {
         cache.insert(
-            format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
+            format!("sites/local_site/devices/{rack}/measurements/operating_state/none"),
             (json!(0.0), Instant::now()),
         );
         cache.insert(
-            format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
+            format!("sites/local_site/devices/{rack}/measurements/state_of_charge/percent"),
             (json!(50.0), Instant::now()),
         );
     }
@@ -108,7 +108,7 @@ fn compute_shares_splits_equally_across_two_standby_children() {
         poi_active_power_topic: None,
     };
     // Act
-    let mut shares = compute_shares(&binding, 200_000.0, "site_001", &cache).unwrap();
+    let mut shares = compute_shares(&binding, 200_000.0, "local_site", &cache).unwrap();
     shares.sort_by(|a, b| a.0.cmp(&b.0));
     // Assert
     assert_eq!(
@@ -125,11 +125,11 @@ fn floored_pair(soc_1: f64, soc_2: f64) -> (DistributeBinding, InputCache) {
     let cache = new_input_cache();
     for (rack, soc) in [("rack_1", soc_1), ("rack_2", soc_2)] {
         cache.insert(
-            format!("sites/site_001/devices/{rack}/measurements/operating_state/none"),
+            format!("sites/local_site/devices/{rack}/measurements/operating_state/none"),
             (json!(0.0), Instant::now()),
         );
         cache.insert(
-            format!("sites/site_001/devices/{rack}/measurements/state_of_charge/percent"),
+            format!("sites/local_site/devices/{rack}/measurements/state_of_charge/percent"),
             (json!(soc), Instant::now()),
         );
     }
@@ -166,7 +166,7 @@ fn sorted_shares(
     target: f64,
     cache: &InputCache,
 ) -> Vec<(String, f64)> {
-    let mut shares = compute_shares(binding, target, "site_001", cache).unwrap();
+    let mut shares = compute_shares(binding, target, "local_site", cache).unwrap();
     shares.sort_by(|a, b| a.0.cmp(&b.0));
     shares
 }

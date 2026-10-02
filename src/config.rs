@@ -117,13 +117,13 @@ local:
   device_api_url: http://localhost:3000
   broker_url: tcp://localhost:1883
   mqtt_username: arcnode_gateway
-  site_id: site_001
+  site_id: local_site
   log_level: info
 beta:
   device_api_url: http://device-api:3000
   broker_url: tcp://hivemq:1883
   mqtt_username: arcnode_gateway
-  site_id: arcnode_beta
+  site_id: beta_site
   log_level: info
 "#;
 
@@ -131,7 +131,7 @@ beta:
     fn defaults_only_picks_stage() {
         let defaults = write_yaml(DEFAULTS);
         let cfg = load_config_from(defaults.path(), None, "local").unwrap();
-        assert_eq!(cfg.site_id, "site_001");
+        assert_eq!(cfg.site_id, "local_site");
         assert_eq!(cfg.broker_url, "tcp://localhost:1883");
     }
 
@@ -184,6 +184,22 @@ beta:
             "beta",
         )
         .unwrap();
-        assert_eq!(cfg.site_id, "arcnode_beta");
+        assert_eq!(cfg.site_id, "beta_site");
+    }
+
+    #[test]
+    fn shipped_defaults_name_each_site_after_its_env() {
+        // Arrange — the real cfg.defaults.yml, not the DEFAULTS fixture
+        let defaults = Path::new(env!("CARGO_MANIFEST_DIR")).join("cfg.defaults.yml");
+        for (env_name, expected) in [
+            ("local", "local_site"),
+            ("beta", "beta_site"),
+            ("device-demo", "device_demo_site"),
+        ] {
+            // Act
+            let cfg = load_config_from(&defaults, None, env_name).unwrap();
+            // Assert
+            assert_eq!(cfg.site_id, expected);
+        }
     }
 }

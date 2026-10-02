@@ -72,7 +72,7 @@ async fn synthetic_headroom_publishes_sum_of_cached_mqtt_inputs() -> Result<()> 
     sub.connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
         .await?;
     let output_topic =
-        "sites/site_001/devices/bess_module_1/measurements/import_headroom/watts".to_string();
+        "sites/local_site/devices/bess_module_1/measurements/import_headroom/watts".to_string();
     sub.subscribe(&output_topic, 0).await?;
 
     // Spawn the gateway.
@@ -85,7 +85,7 @@ async fn synthetic_headroom_publishes_sum_of_cached_mqtt_inputs() -> Result<()> 
         device_api_url,
         broker_url: broker_url.clone(),
         mqtt_username: "arcnode_gateway".to_string(),
-        site_id: "site_001".to_string(),
+        site_id: "local_site".to_string(),
         log_level: "info".to_string(),
         gateway_credentials: None,
     };
@@ -108,8 +108,9 @@ async fn synthetic_headroom_publishes_sum_of_cached_mqtt_inputs() -> Result<()> 
     // Small delay so the gateway has time to subscribe to the inputs.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let import_topic = "sites/site_001/devices/operating_envelope/measurements/import_limit/watts";
-    let active_topic = "sites/site_001/devices/bess_module_1/measurements/active_power/watts";
+    let import_topic =
+        "sites/local_site/devices/operating_envelope/measurements/import_limit/watts";
+    let active_topic = "sites/local_site/devices/bess_module_1/measurements/active_power/watts";
     let import_payload = r#"{"ts":"2026-05-17T00:00:00Z","value":5000000.0}"#;
     let active_payload = r#"{"ts":"2026-05-17T00:00:00Z","value":2000000.0}"#;
 

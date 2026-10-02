@@ -28,7 +28,7 @@ fn init_tracing() {
     });
 }
 
-const SITE_ID: &str = "site_001";
+const SITE_ID: &str = "local_site";
 const MODULE_1: &str = "module_1";
 const MODULE_2: &str = "module_2";
 const RACK_1: &str = "rack_1a";
