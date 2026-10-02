@@ -10,6 +10,7 @@ use serde::Deserialize;
 /// - `{site_id}` — substituted from gateway runtime config at subscribe time.
 /// - `{device_id}` — already resolved by `ems-device-api` at AsyncAPI gen time.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyntheticBinding {
     /// Operation name: `subtract`, `sum`, `mean`, `max`, `min`, `weighted_mean`.
     pub operation: String,
@@ -28,6 +29,7 @@ pub struct SyntheticBinding {
 
 /// One `(topic, weight)` entry in a `weighted_mean` synthetic binding.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WeightedPair {
     /// The MQTT topic to read the value from.
     pub topic: String,
@@ -46,6 +48,7 @@ pub struct WeightedPair {
 /// `set_active_power` command changes shape depending on whether it's
 /// envelope-guarded.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributeBinding {
     /// Allocation policy name: `equal_split` or `soc_weighted`.
     pub allocation_policy: String,
@@ -91,6 +94,7 @@ pub struct DistributeBinding {
 
 /// One child's identity + static bounds for command distribution.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChildAllocation {
     /// The child device's id — resolves its own write binding via the same
     /// (device_id, verb+target) lookup the module's own command used.

@@ -6,6 +6,7 @@ use serde::Deserialize;
 /// Modbus TCP binding fields (template + device.connection merged in
 /// device-api's `x-protocol-source` extension).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModbusTcpBinding {
     /// Target host (IP or DNS) for the protocol connection.
     pub host: String,
@@ -43,6 +44,7 @@ pub struct ModbusTcpBinding {
 
 /// SNMP v2c binding fields.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnmpBinding {
     /// Target host (IP or DNS) for the SNMP agent.
     pub host: String,
@@ -63,6 +65,7 @@ fn unit_scale() -> f64 {
 
 /// Redfish (HTTP+JSON, DSP0266) binding fields.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RedfishBinding {
     /// Target host (IP or DNS) for the Redfish service.
     pub host: String,
@@ -82,6 +85,7 @@ pub struct RedfishBinding {
 
 /// BACnet/IP (ASHRAE 135 Annex J) binding fields.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BacnetIpBinding {
     /// Target host (IP or DNS) for the BACnet/IP endpoint (router or device).
     pub host: String,
@@ -102,6 +106,7 @@ pub struct BacnetIpBinding {
 /// the credentials in `cfg.gateway_credentials`, then sends a
 /// ReadProperty over the hub addressed to `device_vmac`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BacnetScBinding {
     /// `wss://host:port/` URL of the BACnet hub the device is connected to.
     pub hub_url: String,
@@ -118,6 +123,7 @@ pub struct BacnetScBinding {
 
 /// DNP3 TCP binding fields.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Dnp3TcpBinding {
     /// Target host (IP or DNS) for the outstation.
     pub host: String,

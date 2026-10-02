@@ -154,6 +154,10 @@ pub enum ProtocolBinding {
 mod source_map_test;
 
 #[cfg(test)]
+#[path = "unknown_fields_test.rs"]
+mod unknown_fields_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
