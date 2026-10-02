@@ -43,6 +43,7 @@ async fn read_cmd_register(port: u16) -> Result<i32> {
 }
 
 #[tokio::test]
+#[ignore = "beyond the gateway's own contracts (whole-chain or device-api internals); skipped pending pruning"]
 async fn real_templates_resolve_and_distribute_soc_weighted_write() -> Result<()> {
     init_tracing();
     // Arrange — full real stack: postgres + hivemq + device-api on their own

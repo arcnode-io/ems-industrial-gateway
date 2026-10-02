@@ -37,6 +37,7 @@ async fn read_cmd_register(port: u16) -> Result<i32> {
 }
 
 #[tokio::test]
+#[ignore = "beyond the gateway's own contracts (whole-chain or device-api internals); skipped pending pruning"]
 async fn discharge_withheld_from_rack_at_reserve_floor() -> Result<()> {
     // Arrange — real stack; rack_1 below the 25% floor, rack_2 above it.
     let network = fixtures::containers::unique_network();

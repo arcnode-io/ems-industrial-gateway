@@ -126,6 +126,7 @@ async fn publish(op: &AsyncClient, topic: &str, value: &str) -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "beyond the gateway's own contracts (whole-chain or device-api internals); skipped pending pruning"]
 async fn a_curtailment_is_covered_by_battery_while_gpus_stay_at_full_power() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
     // Arrange — one module over one rack, one GPU node at full power

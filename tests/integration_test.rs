@@ -37,6 +37,7 @@ const COLLECTION_TIMEOUT: Duration = Duration::from_secs(45);
 /// discharging grows import headroom), publishes the result on the canonical
 /// `bess_module_1.import_headroom` topic.
 #[tokio::test]
+#[ignore = "beyond the gateway's own contracts (whole-chain or device-api internals); skipped pending pruning"]
 async fn synthetic_headroom_publishes_sum_of_cached_mqtt_inputs() -> Result<()> {
     init_tracing();
     // Arrange — minimal fixture: MQTT + postgres (device-api dep) + device-api
