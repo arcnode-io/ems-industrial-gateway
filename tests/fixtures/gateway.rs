@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// Run a gateway against a one-device spec (`node_1` with `readings`) for
-/// `secs` seconds, then stop it. Returns how long it took to stop.
+/// `secs` seconds of polling, then stop it. Returns how long it took to stop.
 pub async fn poll_for(
     site_id: &str,
     readings: serde_json::Map<String, Value>,
@@ -39,6 +39,17 @@ pub async fn poll_for(
         let cancel = cancel.clone();
         tokio::spawn(async move { app::run(cfg, cancel).await })
     };
+    // Reason: the window counts polling only. Broker connect + spec fetch
+    // come first and take a variable while on a loaded machine; pollers
+    // spawn as soon as the spec arrives.
+    while stub
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .is_empty()
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     tokio::time::sleep(Duration::from_secs(secs)).await;
     let stopping = std::time::Instant::now();
     cancel.cancel();
