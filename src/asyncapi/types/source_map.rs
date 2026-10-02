@@ -10,10 +10,12 @@
 //!   a SunSpec scale factor, which only reads apply. A bad template on one
 //!   device mustn't take every other device offline.
 //! - Unread DNP3 point type: measurements read analog or binary inputs only.
+//! - A power cap with part of an envelope guard: shedding was enabled but
+//!   can't run.
 //!
 //! Anything else that doesn't parse is still a real error.
 
-use super::{CommandSource, ProtocolBinding, ProtocolSource};
+use super::{CommandSource, PowerCapBinding, ProtocolBinding, ProtocolSource};
 use crate::dnp3::master::point_kind;
 use crate::modbus::codec::{read_function, write_function};
 use serde::Deserialize;
@@ -46,8 +48,26 @@ pub fn commands<'de, D: Deserializer<'de>>(d: D) -> Result<SourceMap<CommandSour
             Err("scale_factor_address (SunSpec sunssf) is only applied on reads".to_string())
         }
         ProtocolBinding::ModbusTcp(m) => write_function(m.function_code, m.data_type).map(drop),
+        ProtocolBinding::PowerCap(p) => whole_guard(p),
         _ => Ok(()),
     })
+}
+
+/// A power cap's envelope guard is all six fields or none. Part of one means
+/// the site enabled compute shedding but the gateway couldn't run it.
+fn whole_guard(p: &PowerCapBinding) -> Result<(), String> {
+    let present = [
+        p.import_limit_topic.is_some(),
+        p.export_limit_topic.is_some(),
+        p.poi_active_power_topic.is_some(),
+        p.hysteresis_margin.is_some(),
+        p.hysteresis_dwell_secs.is_some(),
+        p.ramp_rate_per_sec.is_some(),
+    ];
+    match present.iter().filter(|&&f| f).count() {
+        0 | 6 => Ok(()),
+        n => Err(format!("power_cap envelope guard has {n} of its 6 fields")),
+    }
 }
 
 /// Shared walk: skip unprovisioned devices, type each entry, then skip the

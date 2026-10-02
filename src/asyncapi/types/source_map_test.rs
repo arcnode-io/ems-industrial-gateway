@@ -143,3 +143,45 @@ fn a_dnp3_measurement_with_an_unread_point_type_is_skipped() {
     let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
     assert!(!parsed.x_protocol_source.contains_key("relay"));
 }
+
+#[test]
+fn a_power_cap_with_half_an_envelope_guard_is_skipped_not_run_unguarded() {
+    // Arrange — topics present, hysteresis missing: shedding would silently
+    // be off on a site that enabled it
+    let child = json!({ "device_id": "gpu_node_01", "target": "gpu_1_power_limit", "min_w": 200.0, "max_w": 1000.0 });
+    let cap = |guard: Value| {
+        let mut c = json!({
+            "verb": "set", "target": "power_limit", "unit": "percent",
+            "protocol": "power_cap", "children": [child.clone()],
+        });
+        c.as_object_mut()
+            .unwrap()
+            .extend(guard.as_object().unwrap().clone());
+        c
+    };
+    let topics = json!({
+        "import_limit_topic": "i", "export_limit_topic": "e", "poi_active_power_topic": "p",
+    });
+    let mut full = topics.clone();
+    full.as_object_mut().unwrap().extend(
+        json!({ "hysteresis_margin": 0.05, "hysteresis_dwell_secs": 30.0, "ramp_rate_per_sec": 0.1 })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let spec = json!({
+        "info": { "version": "v1" },
+        "x-protocol-source": {},
+        "x-command-source": {
+            "compute_plain": { "set_power_limit": cap(json!({})) },
+            "compute_guarded": { "set_power_limit": cap(full) },
+            "compute_half": { "set_power_limit": cap(topics) },
+        },
+    });
+    // Act
+    let parsed: AsyncApiSpec = serde_json::from_value(spec).unwrap();
+    // Assert
+    assert!(parsed.x_command_source.contains_key("compute_plain"));
+    assert!(parsed.x_command_source.contains_key("compute_guarded"));
+    assert!(!parsed.x_command_source.contains_key("compute_half"));
+}
