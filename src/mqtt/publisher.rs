@@ -24,6 +24,12 @@ pub struct FloatSample {
     pub value: f64,
 }
 
+/// QoS for measurements (ADR §18): periodic telemetry, the next reading
+/// supersedes a lost one. Reason: nothing to track in flight, so a dropped
+/// connection has no QoS 1 publications for paho to clean up (paho C 1.3.14
+/// double-frees those, eclipse-paho/paho.mqtt.c#1622).
+const QOS_MEASUREMENT: i32 = 0;
+
 /// Outbound publishes paho may hold before it refuses more.
 ///
 /// Reason: paho's default (100) applies while connected too, counting every
@@ -90,7 +96,7 @@ fn classify_connect_error(e: &paho_mqtt::Error) -> anyhow::Error {
     }
 }
 
-/// Publish an already-shaped `{ts, value}` sample (see `payload`) at QoS 1.
+/// Publish an already-shaped `{ts, value}` sample (see `payload`).
 pub async fn publish_sample(
     client: &AsyncClient,
     topic: &str,
@@ -98,20 +104,20 @@ pub async fn publish_sample(
 ) -> Result<()> {
     let payload = serde_json::to_vec(sample).context("serialize sample")?;
     client
-        .publish(Message::new(topic, payload, 1))
+        .publish(Message::new(topic, payload, QOS_MEASUREMENT))
         .await
         .context("mqtt publish")?;
     Ok(())
 }
 
-/// Publish a FloatSample at QoS 1 to the given topic.
+/// Publish a FloatSample to the given topic.
 pub async fn publish_measurement(client: &AsyncClient, topic: &str, value: f64) -> Result<()> {
     let sample = FloatSample {
         ts: Utc::now().to_rfc3339(),
         value,
     };
     let payload = serde_json::to_vec(&sample).context("serialize FloatSample")?;
-    let msg = Message::new(topic, payload, 1);
+    let msg = Message::new(topic, payload, QOS_MEASUREMENT);
     client.publish(msg).await.context("mqtt publish")?;
     Ok(())
 }
