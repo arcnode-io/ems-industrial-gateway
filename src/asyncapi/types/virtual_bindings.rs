@@ -110,3 +110,46 @@ pub struct ChildAllocation {
     /// The child's own static upper bound (e.g. `active_power.bounds.max`).
     pub power_max: f64,
 }
+
+/// Fleet power cap: one percentage applied to every child's own power limit
+/// (compute_module over its GPUs). With the envelope guard topics present
+/// (the DTM's `compute_shed_enabled`), the gateway also drives it to shed
+/// load the battery couldn't cover.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PowerCapBinding {
+    /// Every power limit the cap drives.
+    pub children: Vec<CapChild>,
+    /// Envelope guard: `operating_envelope` import limit.
+    #[serde(default)]
+    pub import_limit_topic: Option<String>,
+    /// Envelope guard: `operating_envelope` export limit.
+    #[serde(default)]
+    pub export_limit_topic: Option<String>,
+    /// Envelope guard: the POI meter's `active_power` (+ import).
+    #[serde(default)]
+    pub poi_active_power_topic: Option<String>,
+    /// Fraction of a limit inside which the envelope counts as recovered.
+    #[serde(default)]
+    pub hysteresis_margin: Option<f64>,
+    /// Sustained time before shedding or restoring.
+    #[serde(default)]
+    pub hysteresis_dwell_secs: Option<f64>,
+    /// Largest change in cap fraction per second.
+    #[serde(default)]
+    pub ramp_rate_per_sec: Option<f64>,
+}
+
+/// One power limit a fleet cap drives, with its allowable range.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapChild {
+    /// Device carrying the limit (a gpu_node).
+    pub device_id: String,
+    /// The limit's command target; dispatched as `set_{target}`.
+    pub target: String,
+    /// Lowest cap the device accepts.
+    pub min_w: f64,
+    /// Highest cap the device accepts; 100% of the fleet cap.
+    pub max_w: f64,
+}

@@ -505,6 +505,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             object_instance: b.object_instance,
             property_id: b.property_id.clone(),
         }),
+        ProtocolBinding::PowerCap(p) => ProtocolBinding::PowerCap(p.clone()),
         ProtocolBinding::Distribute(d) => ProtocolBinding::Distribute(DistributeBinding {
             allocation_policy: d.allocation_policy.clone(),
             children: d.children.clone(),

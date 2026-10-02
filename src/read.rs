@@ -42,8 +42,10 @@ pub async fn read_value(
             unreachable!("synthetic bindings are driven by the synthetic module, not the poller")
         }
         // Distribute is command-only; it never appears in x-protocol-source.
-        ProtocolBinding::Distribute(_) => {
-            unreachable!("distribute bindings are commands, never a measurement source")
+        ProtocolBinding::Distribute(_) | ProtocolBinding::PowerCap(_) => {
+            unreachable!(
+                "distribute and power_cap bindings are commands, never a measurement source"
+            )
         }
     }
 }

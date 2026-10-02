@@ -26,6 +26,7 @@ pub mod allocation;
 #[cfg(test)]
 mod allocation_test;
 mod distribute;
+mod power_cap;
 mod topic;
 mod write_order;
 #[cfg(test)]
@@ -230,6 +231,9 @@ pub(crate) async fn execute_setpoint(
             let trust = device_trust.get(device_id);
             redfish::write::write_setpoint(b, value, trust, creds).await
         }
+        ProtocolBinding::PowerCap(p) => {
+            power_cap::dispatch_power_cap(p, value, device_channels, device_trust, creds).await
+        }
         ProtocolBinding::Distribute(d) => {
             distribute::dispatch_distribute(
                 d,
@@ -261,6 +265,7 @@ fn protocol_name(binding: &ProtocolBinding) -> &'static str {
         ProtocolBinding::BacnetSc(_) => "bacnet_sc",
         ProtocolBinding::Synthetic(_) => "synthetic",
         ProtocolBinding::Distribute(_) => "distribute",
+        ProtocolBinding::PowerCap(_) => "power_cap",
     }
 }
 

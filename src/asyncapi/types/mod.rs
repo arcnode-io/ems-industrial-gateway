@@ -16,7 +16,9 @@ mod virtual_bindings;
 pub use bindings::{
     BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding, SnmpBinding,
 };
-pub use virtual_bindings::{ChildAllocation, DistributeBinding, SyntheticBinding, WeightedPair};
+pub use virtual_bindings::{
+    CapChild, ChildAllocation, DistributeBinding, PowerCapBinding, SyntheticBinding, WeightedPair,
+};
 
 use crate::asyncapi::trust::DeviceTrust;
 use serde::Deserialize;
@@ -147,6 +149,10 @@ pub enum ProtocolBinding {
     /// a max-min fair allocation policy. See `dispatch::allocation`.
     #[serde(rename = "distribute")]
     Distribute(DistributeBinding),
+    /// Power cap: command-only, one percentage applied to every child's own
+    /// power limit. See `dispatch::power_cap`.
+    #[serde(rename = "power_cap")]
+    PowerCap(PowerCapBinding),
 }
 
 #[cfg(test)]
