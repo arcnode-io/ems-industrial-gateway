@@ -131,10 +131,12 @@ async fn poll_due(
         match read {
             Ok(raw) => {
                 if let Err(e) = publish(client, p, &raw).await {
-                    warn!(topic = %p.topic, error = %e, "publish failed");
+                    warn!(topic = %p.topic, error = format!("{e:#}"), "publish failed");
                 }
             }
-            Err(e) => warn!(topic = %p.topic, error = %e, "read failed; skipping tick"),
+            Err(e) => {
+                warn!(topic = %p.topic, error = format!("{e:#}"), "read failed; skipping tick")
+            }
         }
         next[i] = advance(next[i], p.period, Instant::now());
     }

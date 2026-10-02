@@ -24,6 +24,16 @@ pub struct FloatSample {
     pub value: f64,
 }
 
+/// Outbound publishes paho may hold before it refuses more.
+///
+/// Reason: paho's default (100) applies while connected too, counting every
+/// publish until its send thread writes it out. Each device poller and
+/// synthetic task waits for its publish before the next, so outstanding
+/// publishes never exceed the task count: hundreds per site, past 100 at
+/// once on a busy tick. Sized well above any site's task count; a queued
+/// sample is a few hundred bytes.
+const MAX_BUFFERED_PUBLISHES: i32 = 10_000;
+
 /// Build an MQTT client and connect with username/password.
 ///
 /// `password` is the env-var secret `MQTT_GATEWAY_PASSWORD`; caller pulls it
@@ -39,6 +49,7 @@ pub async fn connect(
     let create_opts = CreateOptionsBuilder::new()
         .server_uri(broker_url)
         .client_id(client_id)
+        .max_buffered_messages(MAX_BUFFERED_PUBLISHES)
         .finalize();
     let client = AsyncClient::new(create_opts).context("create mqtt client")?;
     let conn_opts = ConnectOptionsBuilder::new()
