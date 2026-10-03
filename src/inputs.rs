@@ -61,6 +61,9 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                     topics.insert(substitute_site_id(&child.operating_state_topic, site_id));
                     topics.insert(substitute_site_id(&child.state_of_charge_topic, site_id));
                 }
+                if let Some(reserve) = &d.operator_reserve_topic {
+                    topics.insert(substitute_site_id(reserve, site_id));
+                }
                 if let Some(guard) = envelope::envelope_guard_config(d) {
                     topics.insert(substitute_site_id(&guard.import_limit_topic, site_id));
                     topics.insert(substitute_site_id(&guard.export_limit_topic, site_id));

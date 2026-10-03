@@ -5,6 +5,7 @@ use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::allocation::{self, AllocationPolicy, ChildCapacity, OperatingState};
+use crate::dispatch::reserve;
 use crate::envelope;
 use crate::modbus::client as modbus;
 use crate::synthetic::{InputCache, as_number};
@@ -50,11 +51,12 @@ pub fn compute_shares(
     cache: &InputCache,
 ) -> Result<Vec<(String, f64)>> {
     let policy = AllocationPolicy::parse(&binding.allocation_policy)?;
+    let floor = reserve::effective_floor_percent(binding, site_id, cache);
     let children: Vec<ChildCapacity> = binding
         .children
         .iter()
         .map(|c| resolve_child(c, target, site_id, cache))
-        .map(|child| child.map(|c| apply_reserve_floor(binding, c, target)))
+        .map(|child| child.map(|c| apply_reserve_floor(floor, c, target)))
         .collect::<Result<_>>()?;
     let shares = allocation::allocate(target, &children, policy);
     if shares.is_empty() {
@@ -129,20 +131,16 @@ fn resolve_child(
 }
 
 /// Zero a child's discharge headroom once its SoC is at or below the
-/// binding's reserve floor, so allocation hands its share to children still
-/// above it. Charging is never restricted.
+/// effective reserve floor (`reserve`), so allocation hands its share to
+/// children still above it. Charging is never restricted.
 ///
 /// Reason: enforced per child, so every child keeps floor% of its own
 /// capacity and the site total can never dip below the site-wide reserve.
 /// Residual overshoot: a child crossing the floor mid-command keeps
 /// discharging until the next 1 Hz rebalance tick recomputes shares, plus
 /// however stale the BMS's SoC reading is (~1 s × that child's power).
-fn apply_reserve_floor(
-    binding: &DistributeBinding,
-    child: ChildCapacity,
-    target: f64,
-) -> ChildCapacity {
-    match binding.state_of_charge_floor_percent {
+fn apply_reserve_floor(floor: Option<f64>, child: ChildCapacity, target: f64) -> ChildCapacity {
+    match floor {
         Some(floor) if target > 0.0 && child.state_of_charge <= floor => ChildCapacity {
             headroom: 0.0,
             ..child

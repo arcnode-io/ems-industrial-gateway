@@ -27,6 +27,7 @@ pub mod allocation;
 mod allocation_test;
 mod distribute;
 pub(crate) mod power_cap;
+mod reserve;
 mod topic;
 mod write_order;
 #[cfg(test)]

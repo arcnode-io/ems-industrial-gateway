@@ -549,6 +549,8 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             export_limit_topic: d.export_limit_topic.clone(),
             active_power_topic: d.active_power_topic.clone(),
             poi_active_power_topic: d.poi_active_power_topic.clone(),
+            operator_reserve_topic: d.operator_reserve_topic.clone(),
+            site_capacity_wh: d.site_capacity_wh,
         }),
     }
 }

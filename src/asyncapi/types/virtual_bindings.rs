@@ -90,6 +90,14 @@ pub struct DistributeBinding {
     /// and outside the all-or-nothing guard set: absent means site load 0.
     #[serde(default)]
     pub poi_active_power_topic: Option<String>,
+    /// MQTT topic carrying the operator's reserve (Wh), `der_dispatch`'s
+    /// `operator_reserve`. Absent: no operator reserve.
+    #[serde(default)]
+    pub operator_reserve_topic: Option<String>,
+    /// Installed energy across every battery rack on the site (Wh), to turn
+    /// the site-wide operator reserve into each module's floor percent.
+    #[serde(default)]
+    pub site_capacity_wh: Option<f64>,
 }
 
 /// One child's identity + static bounds for command distribution.

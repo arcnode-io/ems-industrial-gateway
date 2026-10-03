@@ -106,6 +106,8 @@ fn compute_shares_splits_equally_across_two_standby_children() {
         export_limit_topic: None,
         active_power_topic: None,
         poi_active_power_topic: None,
+        operator_reserve_topic: None,
+        site_capacity_wh: None,
     };
     // Act
     let mut shares = compute_shares(&binding, 200_000.0, "local_site", &cache).unwrap();
@@ -157,6 +159,8 @@ fn floored_pair(soc_1: f64, soc_2: f64) -> (DistributeBinding, InputCache) {
         export_limit_topic: None,
         active_power_topic: None,
         poi_active_power_topic: None,
+        operator_reserve_topic: None,
+        site_capacity_wh: None,
     };
     (binding, cache)
 }
@@ -243,4 +247,28 @@ async fn a_command_on_an_envelope_guarded_module_writes_no_child() {
     .await;
     // Assert
     assert!(dispatched.is_ok(), "{dispatched:?}");
+}
+
+#[test]
+fn the_operator_reserve_holds_back_a_rack_the_supplier_floor_would_not() {
+    // Arrange — supplier floor 25%; operator keeps 4 of 8 MWh: 50%
+    let (mut binding, cache) = floored_pair(40.0, 60.0);
+    binding.operator_reserve_topic = Some(
+        "sites/{site_id}/devices/der_dispatch/measurements/operator_reserve/watt_hours".into(),
+    );
+    binding.site_capacity_wh = Some(8_000_000.0);
+    cache.insert(
+        "sites/local_site/devices/der_dispatch/measurements/operator_reserve/watt_hours".into(),
+        (json!(4_000_000.0), Instant::now()),
+    );
+    // Act
+    let shares = sorted_shares(&binding, 200_000.0, &cache);
+    // Assert — rack_1 at 40% holds its reserve
+    assert_eq!(
+        shares,
+        vec![
+            ("rack_1".to_string(), 0.0),
+            ("rack_2".to_string(), 200_000.0)
+        ]
+    );
 }
