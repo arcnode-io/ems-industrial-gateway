@@ -25,6 +25,7 @@ pub mod poi_servo;
 mod poi_servo_test;
 pub mod shed;
 pub mod shed_task;
+pub mod storage_authorized;
 pub mod task;
 pub mod writes;
 
