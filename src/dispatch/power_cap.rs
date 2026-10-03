@@ -20,7 +20,10 @@ pub fn child_caps(binding: &PowerCapBinding, percent: f64) -> Vec<(String, Strin
         .children
         .iter()
         .map(|c| {
-            let cap = (c.max_w * percent / 100.0).clamp(c.min_w, c.max_w);
+            let exact = (c.max_w * percent / 100.0).clamp(c.min_w, c.max_w);
+            // Whole watts, the limit's own resolution: drop float noise, then
+            // round up so a cap never cuts more than the percentage asked.
+            let cap = ((exact * 1e6).round() / 1e6).ceil();
             (c.device_id.clone(), format!("set_{}", c.target), cap)
         })
         .collect()

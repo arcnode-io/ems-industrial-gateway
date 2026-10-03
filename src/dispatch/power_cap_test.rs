@@ -85,3 +85,12 @@ async fn a_fleet_cap_writes_every_gpus_own_limit() {
     // Assert — the stub's expect(2) verifies on drop
     assert!(written.is_ok(), "{written:?}");
 }
+
+#[test]
+fn caps_are_whole_watts() {
+    // The floor percentage comes out of float division (156.8 / 784 kW)
+    let floor_percent = 156_800.0 / 784_000.0 * 100.0;
+    assert_eq!(child_caps(&two_gpus(), floor_percent)[0].2, 200.0);
+    // a fraction of a watt rounds up: a cap never cuts more than asked
+    assert_eq!(child_caps(&two_gpus(), 81.04)[0].2, 811.0);
+}
