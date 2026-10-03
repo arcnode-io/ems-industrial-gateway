@@ -50,7 +50,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Per-device, per-`{verb}_{target}` last real operator/dispatcher setpoint
 /// request — captured in `handle_command` before any envelope clamp, so the
@@ -110,9 +110,10 @@ pub fn event_payload(
 /// Handle one inbound commands/ message end-to-end: parse → `received` →
 /// resolve binding → protocol write → `done`/`failed`. Unknown-site or
 /// unparseable frames are logged and dropped (nothing to correlate an ack
-/// to). `Phase::Done` means the write to the south-side device succeeded;
-/// `Phase::Failed` covers unknown device/command, unsupported protocol, and
-/// write errors alike.
+/// to); commands for a device with no binding here are another service's and
+/// are ignored. `Phase::Done` means the write to the south-side device
+/// succeeded; `Phase::Failed` covers unknown command, unsupported protocol,
+/// and write errors alike.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_command(
     client: &AsyncClient,
@@ -130,6 +131,13 @@ pub async fn handle_command(
         return Ok(());
     };
     let device_id = cmd_topic.device_id;
+    let Some(channels) = device_channels.get(device_id) else {
+        // Reason: commands for a device with no binding here belong to
+        // another service (der_dispatch's go to der-control-api), and so do
+        // their acks; answering would collide with its own.
+        debug!(%device_id, "command for a device the gateway doesn't control; ignoring");
+        return Ok(());
+    };
     let frame: CommandFrame = match serde_json::from_slice(payload) {
         Ok(f) => f,
         Err(err) => {
@@ -140,17 +148,6 @@ pub async fn handle_command(
     let events = event_topic(site_id, device_id);
     publish_event(client, &events, &frame.command_id, Phase::Received, None).await?;
 
-    let Some(channels) = device_channels.get(device_id) else {
-        warn!(%device_id, command_id = %frame.command_id, "dispatch rejected — device not in spec");
-        return publish_event(
-            client,
-            &events,
-            &frame.command_id,
-            Phase::Failed,
-            Some(&format!("unknown device {device_id}")),
-        )
-        .await;
-    };
     let channel_key = format!("{}_{}", cmd_topic.verb, cmd_topic.target);
     let Some(binding) = channels.get(&channel_key) else {
         warn!(%device_id, %channel_key, command_id = %frame.command_id, "dispatch rejected — unknown command");

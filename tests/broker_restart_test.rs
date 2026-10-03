@@ -3,8 +3,9 @@
 //! MQTT subscriptions are broker-side session state. A restarted broker
 //! comes back with none, so a client that only reconnects the socket goes
 //! permanently deaf with no error. Proven with a real HiveMQ restart: the
-//! gateway acks every command with `received` (even for an unknown device),
-//! so an ack after the restart shows both reconnect and resubscribe happened.
+//! gateway acks every command for a device it controls with `received` (even
+//! an unknown command), so an ack after the restart shows both reconnect and
+//! resubscribe happened.
 
 mod fixtures;
 
@@ -74,7 +75,7 @@ async fn command_is_acked(broker_url: &str, attempt: &str) -> Result<()> {
         loop {
             n += 1;
             op.publish(Message::new(
-                format!("sites/{SITE_ID}/devices/ghost/commands/set/active_power/watts"),
+                format!("sites/{SITE_ID}/devices/probe/commands/set/active_power/watts"),
                 format!(r#"{{"ts":"t","value":1,"command_id":"{attempt}-{n}"}}"#),
                 1,
             ))
@@ -102,7 +103,13 @@ async fn commands_still_arrive_after_a_broker_restart() -> Result<()> {
     let stub = spawn_asyncapi_stub(json!({
         "info": { "version": "v1" },
         "x-protocol-source": {},
-        "x-command-source": {},
+        // A device the gateway controls, asked for a command it doesn't
+        // have: acked received → failed with no south-side I/O.
+        "x-command-source": { "probe": { "set_other_power": {
+            "verb": "set", "target": "other_power", "unit": "watts",
+            "protocol": "modbus_tcp", "host": "127.0.0.1", "port": 1, "unit_id": "1",
+            "address": 0, "scale": 1.0, "offset": 0.0,
+        } } },
     }))
     .await;
     unsafe {

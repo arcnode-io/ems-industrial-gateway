@@ -88,7 +88,7 @@ async fn collect_events(
 }
 
 #[tokio::test]
-async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Result<()> {
+async fn operator_command_gets_received_then_done_and_a_foreign_one_no_ack() -> Result<()> {
     // Arrange — real File-RBAC broker; gateway subscriber with a real
     // writable Modbus binding for dev_known.
     let broker = start_ems_hivemq_with_credentials(&credentials_path()).await?;
@@ -133,7 +133,8 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
     assert_eq!(acks[0], ("received".into(), "cmd-1".into(), None));
     assert_eq!(acks[1], ("done".into(), "cmd-1".into(), None));
 
-    // Act — dispatch to a ghost device.
+    // Act — a command for a device the gateway has no binding for (another
+    // service's, like der_dispatch's operator commands)
     operator
         .publish(Message::new(
             GHOST_COMMAND_TOPIC,
@@ -141,20 +142,11 @@ async fn operator_command_gets_received_then_done_then_failed_for_ghost() -> Res
             1,
         ))
         .await?;
-    let acks = collect_events(&mut events_stream, 2).await?;
-
-    // Assert — received → failed with a reason naming the device.
-    assert_eq!(acks[0].0, "received");
-    assert_eq!(acks[1].0, "failed");
-    assert_eq!(acks[1].1, "cmd-2");
+    // Assert — not the gateway's to ack: nothing arrives
+    let acked = timeout(Duration::from_secs(3), events_stream.next()).await;
     assert!(
-        acks[1]
-            .2
-            .as_deref()
-            .unwrap_or_default()
-            .contains("dev_ghost"),
-        "reason should name the unknown device: {:?}",
-        acks[1].2
+        acked.is_err(),
+        "gateway acked a command it doesn't own: {acked:?}"
     );
 
     operator.disconnect(None).await?;
