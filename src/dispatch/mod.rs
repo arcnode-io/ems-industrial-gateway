@@ -48,7 +48,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -58,17 +57,7 @@ use tracing::{info, warn};
 /// toward. The envelope loop's own writes go through `execute_setpoint`
 /// directly, never through `handle_command`, so they can never overwrite
 /// this — see `envelope` module docs.
-pub type LastRequestedSetpoints = Arc<RwLock<HashMap<String, HashMap<String, Requested>>>>;
-
-/// One recorded request: the setpoint, and when it was written straight to
-/// the device. A new `at` is a new direct write, even of the same value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Requested {
-    /// The requested setpoint.
-    pub value: f64,
-    /// When it was written to the device.
-    pub at: Instant,
-}
+pub type LastRequestedSetpoints = Arc<RwLock<HashMap<String, HashMap<String, f64>>>>;
 
 /// QoS for dispatch lifecycle events — at-least-once, same as the commands
 /// family they answer (ADR-002 §11).
@@ -131,7 +120,7 @@ pub async fn handle_command(
     device_trust: &HashMap<String, DeviceTrust>,
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
-    last_requested: &RwLock<HashMap<String, HashMap<String, Requested>>>,
+    last_requested: &RwLock<HashMap<String, HashMap<String, f64>>>,
     topic: &str,
     payload: &[u8],
 ) -> Result<()> {
@@ -183,13 +172,7 @@ pub async fn handle_command(
         .await
         .entry(device_id.to_string())
         .or_default()
-        .insert(
-            channel_key.clone(),
-            Requested {
-                value: frame.value,
-                at: Instant::now(),
-            },
-        );
+        .insert(channel_key.clone(), frame.value);
 
     match execute_setpoint(
         binding,

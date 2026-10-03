@@ -203,8 +203,23 @@ async fn envelope_clamps_autonomously_on_limit_tightening_with_no_command() -> R
         phases.push(v["phase"].as_str().unwrap_or_default().to_string());
     }
     assert_eq!(phases, vec!["received", "done"]);
-    assert_eq!(read_rack_watts(rack1_port).await?, 100_000);
-    assert_eq!(read_rack_watts(rack2_port).await?, 100_000);
+    // The command is the module's requested setpoint; its envelope task
+    // writes it on its next tick rather than the command writing directly.
+    let applied = timeout(Duration::from_secs(10), async {
+        loop {
+            let r1 = read_rack_watts(rack1_port).await?;
+            let r2 = read_rack_watts(rack2_port).await?;
+            if r1 == 100_000 && r2 == 100_000 {
+                return anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await;
+    assert!(
+        applied.is_ok(),
+        "envelope task never applied the 200 kW command"
+    );
 
     // Act — NO new command. Tighten export_limit below the module's real
     // discharge (+active_power), simulating der_control_api pushing a new

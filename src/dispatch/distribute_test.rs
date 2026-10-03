@@ -215,3 +215,32 @@ fn charging_is_never_restricted_by_the_reserve_floor() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_command_on_an_envelope_guarded_module_writes_no_child() {
+    // Arrange — guarded: every envelope guard field set. No child bindings
+    // in the spec, so any attempted child write fails the dispatch.
+    let (mut binding, cache) = floored_pair(60.0, 60.0);
+    binding.ramp_rate_per_sec = Some(0.1);
+    binding.hysteresis_margin = Some(0.05);
+    binding.hysteresis_dwell_secs = Some(30.0);
+    binding.power_min = Some(-8_000_000.0);
+    binding.power_max = Some(8_000_000.0);
+    binding.import_limit_topic = Some("i".to_string());
+    binding.export_limit_topic = Some("e".to_string());
+    binding.active_power_topic = Some("a".to_string());
+    // Act — the envelope task applies it, clamped, from last_requested
+    let dispatched = dispatch_distribute(
+        &binding,
+        200_000.0,
+        "set_active_power",
+        "local_site",
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        &cache,
+    )
+    .await;
+    // Assert
+    assert!(dispatched.is_ok(), "{dispatched:?}");
+}

@@ -44,7 +44,6 @@ fn simulate(import_limit: Option<f64>, load: impl Fn(usize) -> f64) -> Vec<f64> 
             export_limit: Some(0.0),
             active_power: battery,
             requested_setpoint: REQUESTED_W,
-            requested_at: None,
             poi_active_power: Some(p_poi),
             poi_fresh: true,
             hold_approach: false,
@@ -141,7 +140,6 @@ fn poi_tick(active_power: f64, requested: f64, p_poi: f64) -> EnvelopeTick {
         export_limit: Some(0.0),
         active_power,
         requested_setpoint: requested,
-        requested_at: None,
         poi_active_power: Some(p_poi),
         poi_fresh: true,
         hold_approach: false,
@@ -164,16 +162,17 @@ fn a_stale_battery_reading_does_not_raise_the_ceiling() {
 }
 
 #[test]
-fn a_direct_operator_write_inside_the_envelope_is_left_alone() {
-    // Arrange — controller seeded at 0 kW; then the operator's 50 kW goes
-    // straight to the racks (handle_command writes directly). 72.8 kW load.
+fn an_operator_request_inside_the_envelope_is_applied_by_the_controller() {
+    // Arrange — the operator asks 50 kW; with the envelope guarding the
+    // module nothing writes it directly, so the racks still hold 0. 72.8 kW
+    // load, zero export.
     let mut ctrl = EnvelopeController::new(config(), 0.0);
     ctrl.tick(poi_tick(0.0, 0.0, 72_800.0));
-    // Act — next tick sees the new request and the racks at 50 kW
-    let out = ctrl.tick(poi_tick(50_000.0, 50_000.0, 22_800.0));
-    // Assert — not pulled back toward the controller's own 0
-    assert_eq!(out, None);
-    assert_eq!(ctrl.current_output(), 50_000.0);
+    // Act
+    let out = ctrl.tick(poi_tick(0.0, 50_000.0, 72_800.0));
+    // Assert — moves toward it at the approach gain on the export headroom,
+    // not in one jump
+    assert_eq!(out, Some(0.1 * 72_800.0));
 }
 
 #[test]

@@ -22,10 +22,7 @@
 
 use crate::envelope::bounds;
 pub use crate::envelope::inputs::{EnvelopeConfig, EnvelopeTick};
-use std::time::{Duration, Instant};
-
-/// The longest POI meter lag the servo is tuned for (see `poi_servo`).
-const METER_LAG: Duration = Duration::from_secs(3);
+use std::time::Duration;
 
 /// Which side of the envelope is currently binding, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,12 +51,6 @@ pub struct EnvelopeController {
     config: EnvelopeConfig,
     /// Last tick's limits, so the POI servo can tell a tightening from lag.
     prev_limits: (Option<f64>, Option<f64>),
-    /// Last tick's `requested_setpoint` and when it was written. A change in
-    /// either means `handle_command` just wrote it straight to the device.
-    last_requested: Option<(f64, Option<Instant>)>,
-    /// Time left in which POI readings may still predate the last direct
-    /// write.
-    settling: Duration,
 }
 
 impl EnvelopeController {
@@ -73,8 +64,6 @@ impl EnvelopeController {
             current_output: initial_output,
             config,
             prev_limits: (None, None),
-            last_requested: None,
-            settling: Duration::ZERO,
         }
     }
 
@@ -88,24 +77,10 @@ impl EnvelopeController {
 
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
-    pub fn tick(&mut self, mut input: EnvelopeTick) -> Option<f64> {
-        // Reason: an operator command is written to the device directly,
-        // outside this controller. Knowing that, the device now holds it —
-        // more exact than any reading, which may still be catching up.
-        let requested = (input.requested_setpoint, input.requested_at);
-        if self.last_requested.is_some_and(|r| r != requested) {
-            self.current_output = input.requested_setpoint;
-            self.settling = METER_LAG;
-        }
-        // Reason: POI readings inside the meter's lag predate that write, so
-        // their violation is one the new setpoint may already cover.
-        // Integrating it on top double-counts the step (exported ~400 kW on
-        // the demo). Limit changes still move the bounds meanwhile.
-        if !self.settling.is_zero() {
-            input.poi_fresh = false;
-            self.settling = self.settling.saturating_sub(input.dt);
-        }
-        self.last_requested = Some(requested);
+    pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
+        // A new request is only a new target: commands on a guarded module
+        // aren't written to the device directly (see
+        // `dispatch::dispatch_distribute`), so this is the only writer.
         let bounds::Bounds {
             ceiling,
             floor,

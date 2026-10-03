@@ -127,7 +127,8 @@ async fn inputs(
         .await
         .get(&cfg.device_id)
         .and_then(|m| m.get(&cfg.channel_key))
-        .map_or(100.0, |r| r.value);
+        .copied()
+        .unwrap_or(100.0);
     let children = &cfg.binding.children;
     Some(ShedTick {
         poi_active_power: poi,
