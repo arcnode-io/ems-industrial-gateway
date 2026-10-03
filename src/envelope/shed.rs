@@ -37,7 +37,7 @@ pub struct ShedTick {
 pub struct ShedController {
     /// Dwell, margin and ramp, shared with the BESS envelope guard.
     config: EnvelopeConfig,
-    /// Current fleet cap, whole percent; `None` before the first tick.
+    /// Fleet cap the devices hold, whole percent; `None` before any write.
     percent: Option<f64>,
     /// How long import has stayed over the limit.
     over_for: Duration,
@@ -56,7 +56,9 @@ impl ShedController {
         }
     }
 
-    /// The fleet cap percentage to write, or `None` if unchanged.
+    /// The fleet cap percentage to write, or `None` if unchanged. Takes
+    /// effect only once `confirm`ed: a write that failed leaves the devices
+    /// where they were, so the next tick proposes from there again.
     pub fn tick(&mut self, t: &ShedTick) -> Option<f64> {
         // Never above the operator's cap; their own command already wrote it.
         let current = self
@@ -92,8 +94,12 @@ impl ShedController {
         };
         let floor = t.fleet_min_w * watts_to_percent;
         let next = target.clamp(floor, t.requested_percent).round();
-        self.percent = Some(next);
         (next != current.round()).then_some(next)
+    }
+
+    /// Record that `percent` reached every device.
+    pub fn confirm(&mut self, percent: f64) {
+        self.percent = Some(percent);
     }
 
     /// Clear both dwell timers.

@@ -26,9 +26,16 @@ fn tick(poi_w: f64) -> ShedTick {
     }
 }
 
-/// Feed the same tick `secs` times; the last output.
+/// Feed the same tick `secs` times, confirming every proposal as a
+/// successful write would; the last output.
 fn run(c: &mut ShedController, t: ShedTick, secs: u32) -> Option<f64> {
-    (0..secs).fold(None, |last, _| c.tick(&t).or(last))
+    (0..secs).fold(None, |last, _| {
+        let proposed = c.tick(&t);
+        if let Some(p) = proposed {
+            c.confirm(p);
+        }
+        proposed.or(last)
+    })
 }
 
 #[test]
@@ -80,4 +87,19 @@ fn nothing_moves_inside_the_envelope() {
     let mut inside = tick(500_000.0);
     inside.import_limit = 1_000_000.0;
     assert_eq!(run(&mut c, inside, 60), None);
+}
+
+#[test]
+fn a_cap_that_failed_to_write_is_proposed_again() {
+    // Arrange — wait out the dwell, then the first cut is proposed
+    let mut c = controller();
+    assert_eq!(run(&mut c, tick(30_000.0), 29), None);
+    assert_eq!(c.tick(&tick(30_000.0)), Some(90.0));
+    // Act — the write failed, so it isn't confirmed
+    let again = c.tick(&tick(30_000.0));
+    // Assert — the devices are still at 100%: propose the same cut again
+    assert_eq!(again, Some(90.0));
+    // ...and once confirmed, the next cut builds on it
+    c.confirm(90.0);
+    assert_eq!(c.tick(&tick(30_000.0)), Some(80.0));
 }

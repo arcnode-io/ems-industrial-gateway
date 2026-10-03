@@ -94,8 +94,9 @@ pub fn spawn(
                     info!(device_id = %cfg.device_id, percent, "compute shed: fleet cap");
                     let caps = power_cap::child_caps(&cfg.binding, percent);
                     let (channels, trust) = (devices.0.read().await, devices.1.read().await);
-                    if let Err(e) = power_cap::write_caps(caps, &channels, &trust, cfg.creds.as_ref()).await {
-                        warn!(device_id = %cfg.device_id, error = format!("{e:#}"), "compute shed write failed");
+                    match power_cap::write_caps(caps, &channels, &trust, cfg.creds.as_ref()).await {
+                        Ok(()) => controller.confirm(percent),
+                        Err(e) => warn!(device_id = %cfg.device_id, error = format!("{e:#}"), "compute shed write failed"),
                     }
                 }
             }
