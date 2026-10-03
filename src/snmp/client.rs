@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use snmp2::v3::{Auth, AuthProtocol, Cipher, Security};
 use snmp2::{AsyncSession, Oid, Value};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::warn;
 
 /// Default community for SNMP v2c reads. Industrial gear typically allows
@@ -21,6 +21,12 @@ const COMMUNITY: &[u8] = b"public";
 /// Retry policy mirrors the other protocols — first request can race UDP
 /// arrival/processing.
 const MAX_READ_ATTEMPTS: u32 = 5;
+/// How long one request waits for its answer.
+///
+/// Reason: snmp2's async session waits on its UDP socket with no timeout, so
+/// a request lost in flight (an agent restarting as it landed) hung its
+/// device's poller for good, silently. Same bound as a Modbus read.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Full read pipeline for an SNMP measurement: resolve → GET → cast to f64.
 ///
@@ -72,7 +78,10 @@ async fn try_get_v2c(endpoint: &str, oid: &Oid<'_>) -> Result<f64> {
     let mut sess = AsyncSession::new_v2c(endpoint, COMMUNITY, 0)
         .await
         .context("build snmp2 v2c session")?;
-    let pdu = sess.get(oid).await.context("snmp v2c get")?;
+    let pdu = timeout(ATTEMPT_TIMEOUT, sess.get(oid))
+        .await
+        .context("snmp v2c get timed out")?
+        .context("snmp v2c get")?;
     extract_integer(&pdu)
 }
 
@@ -98,10 +107,14 @@ async fn try_get_v3(
         .context("build snmp2 v3 session")?;
     // engine-id discovery — sends an unauthenticated probe to learn the
     // authoritative engine id + boot/time counters.
-    sess.init()
+    timeout(ATTEMPT_TIMEOUT, sess.init())
         .await
+        .context("snmp v3 init timed out")?
         .context("snmp v3 init / engine-id discovery")?;
-    let pdu = sess.get(oid).await.context("snmp v3 get")?;
+    let pdu = timeout(ATTEMPT_TIMEOUT, sess.get(oid))
+        .await
+        .context("snmp v3 get timed out")?
+        .context("snmp v3 get")?;
     extract_integer(&pdu)
 }
 
@@ -170,50 +183,5 @@ fn scaled(raw: f64, b: &SnmpBinding) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_dotted_oid_handles_sysuptime() {
-        // Arrange + Act
-        let oid = parse_dotted_oid("1.3.6.1.2.1.1.3.0").unwrap();
-        // Assert — round-trip back to dotted form
-        let s = oid.to_string();
-        assert_eq!(s, "1.3.6.1.2.1.1.3.0");
-    }
-
-    #[test]
-    fn load_usm_passphrases_pulls_from_env_keyed_by_security_name() {
-        // Arrange
-        unsafe {
-            std::env::set_var("SNMP_USM_GW_TEST_AUTH_PASSPHRASE", "authsecret");
-            std::env::set_var("SNMP_USM_GW_TEST_PRIV_PASSPHRASE", "privsecret");
-        }
-        // Act
-        let (auth, priv_) = load_usm_passphrases("gw-test").unwrap();
-        // Assert — uppercase + hyphens-to-underscores normalization works
-        assert_eq!(auth, "authsecret");
-        assert_eq!(priv_, "privsecret");
-    }
-
-    #[test]
-    fn scale_multiplies_the_raw_integer() {
-        // Sentry4-MIB reports st4LineCurrent in 0.01 A: raw 1234 = 12.34 A.
-        let b: SnmpBinding = serde_json::from_value(serde_json::json!({
-            "host": "pdu", "port": 161, "oid": "1.3.6.1.4.1.1718.4.1.4.3.1.3.1.1.1",
-            "scale": 0.01,
-        }))
-        .unwrap();
-        assert!((scaled(1234.0, &b) - 12.34).abs() < 1e-9);
-    }
-
-    #[test]
-    fn absent_scale_leaves_the_value_unchanged() {
-        // Specs from before the field existed must read exactly as before.
-        let b: SnmpBinding = serde_json::from_value(serde_json::json!({
-            "host": "pdu", "port": 161, "oid": "1.3.6.1.2.1.1.3.0",
-        }))
-        .unwrap();
-        assert_eq!(scaled(1234.0, &b), 1234.0);
-    }
-}
+#[path = "client_test.rs"]
+mod tests;
