@@ -35,15 +35,30 @@ pub async fn shipped_catalog(
 }
 
 /// DTM with one device per template, device_id = slug. Leaves get a
-/// connection (nothing needs to answer on it); modules are pure rollups.
+/// connection (nothing needs to answer on it) and the module whose template
+/// `contains` them as parent, since rollups and fleet caps resolve over a
+/// module's children; modules are pure rollups.
 pub fn one_of_each(catalog: &Map<String, Value>) -> Value {
+    let parent_of = |slug: &str| -> Option<String> {
+        catalog
+            .iter()
+            .find(|(_, t)| {
+                t["contains"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|e| e["template"] == slug))
+            })
+            .map(|(module, _)| module.clone())
+    };
     let devices: Map<String, Value> = catalog
         .iter()
         .enumerate()
         .map(|(i, (slug, t))| {
             let connection = (t["kind"] == "leaf")
                 .then(|| json!({ "host": "127.0.0.1", "port": 20000 + i, "unit_id": "1" }));
-            let device = json!({ "device_id": slug, "template": slug, "connection": connection });
+            let device = json!({
+                "device_id": slug, "template": slug,
+                "connection": connection, "parent": parent_of(slug),
+            });
             (slug.clone(), device)
         })
         .collect();
