@@ -6,11 +6,14 @@
 //! See `control_law` for the pure ramp/hysteresis/clamp state machine and
 //! `task` for the per-module tick loop + `distribute`-binding wire parsing.
 
+mod anti_windup;
 pub mod bounds;
 pub mod config;
 pub mod control_law;
 #[cfg(test)]
 mod control_law_servo_test;
+#[cfg(test)]
+mod control_law_step_test;
 #[cfg(test)]
 mod control_law_test;
 pub mod inputs;

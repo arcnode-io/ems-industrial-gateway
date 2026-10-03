@@ -24,6 +24,9 @@ use crate::envelope::bounds;
 pub use crate::envelope::inputs::{EnvelopeConfig, EnvelopeTick};
 use std::time::Duration;
 
+/// The longest POI meter lag the servo is tuned for (see `poi_servo`).
+const METER_LAG: Duration = Duration::from_secs(3);
+
 /// Which side of the envelope is currently binding, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -46,7 +49,7 @@ pub struct EnvelopeController {
     dwell_elapsed: Duration,
     /// The gateway's current belief of what the device holds — the ramp's
     /// starting point. Updated on every write this controller issues.
-    current_output: f64,
+    pub(super) current_output: f64,
     /// Configured ramp/hysteresis parameters for this controller.
     config: EnvelopeConfig,
     /// Last tick's limits, so the POI servo can tell a tightening from lag.
@@ -54,6 +57,9 @@ pub struct EnvelopeController {
     /// Last tick's `requested_setpoint`. A change means `handle_command`
     /// just wrote it straight to the device.
     last_requested: Option<f64>,
+    /// Time left in which POI readings may still predate the last direct
+    /// write.
+    settling: Duration,
 }
 
 impl EnvelopeController {
@@ -68,6 +74,7 @@ impl EnvelopeController {
             config,
             prev_limits: (None, None),
             last_requested: None,
+            settling: Duration::ZERO,
         }
     }
 
@@ -81,7 +88,7 @@ impl EnvelopeController {
 
     /// Advance one tick. Returns `Some(new_setpoint)` if the gateway should
     /// write a new value this tick, `None` if the output is unchanged.
-    pub fn tick(&mut self, input: EnvelopeTick) -> Option<f64> {
+    pub fn tick(&mut self, mut input: EnvelopeTick) -> Option<f64> {
         // Reason: an operator command is written to the device directly,
         // outside this controller. Knowing that, the device now holds it —
         // more exact than any reading, which may still be catching up.
@@ -90,6 +97,15 @@ impl EnvelopeController {
             .is_some_and(|r| r != input.requested_setpoint)
         {
             self.current_output = input.requested_setpoint;
+            self.settling = METER_LAG;
+        }
+        // Reason: POI readings inside the meter's lag predate that write, so
+        // their violation is one the new setpoint may already cover.
+        // Integrating it on top double-counts the step (exported ~400 kW on
+        // the demo). Limit changes still move the bounds meanwhile.
+        if !self.settling.is_zero() {
+            input.poi_fresh = false;
+            self.settling = self.settling.saturating_sub(input.dt);
         }
         self.last_requested = Some(input.requested_setpoint);
         let bounds::Bounds {
@@ -170,18 +186,5 @@ impl EnvelopeController {
         }
         self.current_output = value;
         Some(value)
-    }
-}
-
-impl EnvelopeController {
-    /// Pull the controller's output back to what distribution could
-    /// actually deliver (eligible children's capacity).
-    ///
-    /// Reason: anti-windup. With children excluded (e.g. parked at their
-    /// reserve floor) the POI keeps showing headroom or a violation that
-    /// more command can't fix, and the servo would keep integrating. When
-    /// they came back, the wound-up command went out in one tick.
-    pub fn sync_to_delivered(&mut self, delivered: f64) {
-        self.current_output = delivered;
     }
 }
