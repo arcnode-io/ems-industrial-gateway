@@ -20,7 +20,9 @@ dnp3 = "1.6"
 # upstream crate (which had a `bacnet_rs` lib name collision when both
 # were specified).
 bacnet-sc-rs = { git = "https://gitlab.com/joenarvaez/bacnet-sc-rs", branch = "main", features = ["sc"] }
-snmp2 = { version = "0.5", features = ["v3", "tokio"] }
+# heap_buffers: two 64 KB buffers per session, inline by default, overflowed
+# the stack in unoptimized builds.
+snmp2 = { version = "0.5", features = ["v3", "tokio", "heap_buffers"] }
 paho-mqtt = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
