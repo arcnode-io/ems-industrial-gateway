@@ -23,7 +23,6 @@ pub fn input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
     topics.push(format!(
         "sites/{site_id}/devices/der_dispatch/measurements/event_active/none"
     ));
-    topics.push(crate::envelope::storage_authorized::topic(site_id));
     topics
 }
 

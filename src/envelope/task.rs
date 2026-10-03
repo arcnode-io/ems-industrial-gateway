@@ -14,7 +14,6 @@ use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
-use crate::envelope::storage_authorized;
 use crate::envelope::writes::WriteState;
 use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
@@ -149,12 +148,7 @@ async fn tick_once(
                 poi_fresh,
                 hold_approach,
                 power_min: guard.power_min,
-                // Operator withheld storage: no discharge for the envelope.
-                power_max: if storage_authorized::withheld(cache, site_id) {
-                    guard.power_max.min(0.0)
-                } else {
-                    guard.power_max
-                },
+                power_max: guard.power_max,
                 dt,
             });
             ctrl.current_output()
