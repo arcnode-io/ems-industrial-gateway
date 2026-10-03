@@ -18,6 +18,19 @@ use std::time::Duration;
 /// max counts as flat: meter noise, not storage still ramping.
 const SHRINK_DEADBAND: f64 = 0.001;
 
+/// Cap resolution: 0.1% is 1 W on a 1000 W GPU limit, the device's own.
+const STEP_PERCENT: f64 = 0.1;
+
+/// `target` on the `STEP_PERCENT` grid, rounded toward `current` when
+/// cutting. Reason: a cut rounded up past the gap exports the difference
+/// (a whole 1% step on a 0.83% gap exported 1.3 kW on the demo). A raise
+/// rounds up, which only errs toward import.
+fn quantize(current: f64, target: f64) -> f64 {
+    // ceil: toward current for a cut (negative), up for a raise
+    let steps = ((target - current) / STEP_PERCENT).ceil();
+    ((current + steps * STEP_PERCENT) * 10.0).round() / 10.0
+}
+
 /// One tick's inputs.
 #[derive(Debug, Clone, Copy)]
 pub struct ShedTick {
@@ -41,7 +54,8 @@ pub struct ShedTick {
 pub struct ShedController {
     /// Dwell, margin and ramp, shared with the BESS envelope guard.
     config: EnvelopeConfig,
-    /// Fleet cap the devices hold, whole percent; `None` before any write.
+    /// Fleet cap the devices hold, in `STEP_PERCENT` steps; `None` before
+    /// any write.
     percent: Option<f64>,
     /// How long import has stayed over the limit.
     over_for: Duration,
@@ -113,8 +127,8 @@ impl ShedController {
             current
         };
         let floor = t.fleet_min_w * watts_to_percent;
-        let next = target.clamp(floor, t.requested_percent).round();
-        (next != current.round()).then_some(next)
+        let next = quantize(current, target).clamp(floor, t.requested_percent);
+        ((next - current).abs() >= STEP_PERCENT / 2.0).then_some(next)
     }
 
     /// Record that `percent` reached every device.

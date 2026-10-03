@@ -114,9 +114,9 @@ async fn one_site_wide_cut_covers_the_import_once() -> Result<()> {
     })
     .await??;
 
-    // Assert — 50 W of a 2 kW fleet is 2.5% → 98% (whole percent): 980 W on
-    // both GPUs. Per-module controllers would each cut 5%: 950 W.
-    assert_eq!(&first_caps[..2], &[980.0, 980.0], "{first_caps:?}");
+    // Assert — 50 W of a 2 kW fleet is 2.5%: 975 W on both GPUs.
+    // Per-module controllers would each cut 5%: 950 W.
+    assert_eq!(&first_caps[..2], &[975.0, 975.0], "{first_caps:?}");
 
     cancel.cancel();
     gateway.await??;

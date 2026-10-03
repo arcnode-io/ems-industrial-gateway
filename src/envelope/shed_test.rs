@@ -124,3 +124,14 @@ fn import_still_falling_means_storage_is_still_covering_so_no_shed() {
     assert_eq!(run(&mut c, tick(20_000.0), 29), None);
     assert!(c.tick(&tick(20_000.0)).is_some());
 }
+
+#[test]
+fn a_small_gap_is_cut_by_no_more_than_the_gap() {
+    // Arrange — storage power-limited 830 W short (0.83% of a 100 kW fleet)
+    let mut c = controller();
+    assert_eq!(run(&mut c, tick(830.0), 29), None);
+    // Act
+    let cut = c.tick(&tick(830.0));
+    // Assert — 0.8%, not a whole 1% that would cut 1 kW and export 170 W
+    assert_eq!(cut, Some(99.2));
+}
