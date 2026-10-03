@@ -31,6 +31,10 @@ pub struct EnvelopeTick {
     pub active_power: f64,
     /// The last real operator/dispatcher setpoint request — the ramp target.
     pub requested_setpoint: f64,
+    /// When `requested_setpoint` was last written straight to the device
+    /// (an operator or dispatcher command). A new time is a new direct
+    /// write, even of the same value. `None` when nothing tracks it.
+    pub requested_at: Option<std::time::Instant>,
     /// The POI meter's `active_power` (+ import); `None` when the site has
     /// no POI meter, which is the battery-only law.
     pub poi_active_power: Option<f64>,

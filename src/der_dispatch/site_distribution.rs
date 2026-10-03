@@ -83,7 +83,9 @@ async fn operator_setpoints(last_requested: &LastRequestedSetpoints) -> HashMap<
         .read()
         .await
         .iter()
-        .filter_map(|(device, channels)| channels.get(CHANNEL_KEY).map(|v| (device.clone(), *v)))
+        .filter_map(|(device, channels)| {
+            channels.get(CHANNEL_KEY).map(|r| (device.clone(), r.value))
+        })
         .collect()
 }
 

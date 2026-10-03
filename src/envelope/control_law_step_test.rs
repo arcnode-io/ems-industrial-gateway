@@ -38,6 +38,7 @@ fn simulate_dispatch(lag: usize, dispatched: f64) -> Vec<f64> {
                 export_limit: Some(0.0),
                 active_power: battery,
                 requested_setpoint: requested,
+                requested_at: None,
                 poi_active_power: Some(*meter.front().unwrap()),
                 poi_fresh: true,
                 hold_approach: false,
@@ -85,5 +86,61 @@ fn an_envelope_only_event_brings_import_to_zero_without_exporting() {
             "lag {lag}: settled at {:.0} W",
             poi.last().unwrap()
         );
+    }
+}
+
+/// Envelope-only event, battery settled covering the load. At tick 60 a
+/// direct write repeats the request (0 W, as site distribution's release
+/// writes): it lands after the controller's own write that tick, the meter
+/// catches the dip, and the controller only hears of it next tick. Returns
+/// the true POI from the write on.
+fn simulate_repeated_write(lag: usize) -> Vec<f64> {
+    let config = EnvelopeConfig {
+        ramp_rate_per_sec: 0.10,
+        hysteresis_margin: 0.05,
+        hysteresis_dwell: Duration::from_secs(30),
+    };
+    let mut ctrl = EnvelopeController::new(config, 0.0);
+    let mut battery = 0.0;
+    let mut meter = std::collections::VecDeque::from(vec![LOAD_W; lag]);
+    let start = std::time::Instant::now();
+    let mut written_at = start;
+    (0..120)
+        .filter_map(|n| {
+            ctrl.tick(EnvelopeTick {
+                import_limit: Some(0.0),
+                export_limit: Some(0.0),
+                active_power: battery,
+                requested_setpoint: 0.0,
+                requested_at: Some(written_at),
+                poi_active_power: Some(*meter.front().unwrap()),
+                poi_fresh: true,
+                hold_approach: false,
+                power_min: -POWER_MAX,
+                power_max: POWER_MAX,
+                dt: Duration::from_secs(1),
+            });
+            battery = ctrl.current_output();
+            if n == 60 {
+                battery = 0.0;
+                written_at = start + Duration::from_secs(60);
+            }
+            let true_poi = LOAD_W - battery;
+            meter.pop_front();
+            meter.push_back(true_poi);
+            (n >= 60).then_some(true_poi)
+        })
+        .collect()
+}
+
+#[test]
+fn a_direct_write_of_an_unchanged_value_is_still_seen() {
+    for lag in 1..=3 {
+        // Act
+        let poi = simulate_repeated_write(lag);
+        // Assert — the controller knows the battery went to 0 and climbs
+        // back from there, not from what it believed before
+        let worst = poi.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(worst >= -1.0, "lag {lag}: exported {:.0} W", -worst);
     }
 }

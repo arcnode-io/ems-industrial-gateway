@@ -92,13 +92,13 @@ async fn tick_once(
     device_trust: &Arc<RwLock<HashMap<String, DeviceTrust>>>,
     creds: Option<&GatewayCredentials>,
 ) {
-    let requested_setpoint = last_requested
+    let requested = last_requested
         .read()
         .await
         .get(&cfg.device_id)
         .and_then(|m| m.get(&cfg.channel_key))
-        .copied()
-        .unwrap_or(0.0);
+        .copied();
+    let requested_setpoint = requested.map_or(0.0, |r| r.value);
 
     let target = match &cfg.guard {
         Some(guard) => {
@@ -144,6 +144,7 @@ async fn tick_once(
                 export_limit,
                 active_power,
                 requested_setpoint,
+                requested_at: requested.map(|r| r.at),
                 poi_active_power: poi_active_power.map(|(p, _)| p),
                 poi_fresh,
                 hold_approach,
