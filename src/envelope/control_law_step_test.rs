@@ -16,6 +16,11 @@ const POWER_MAX: f64 = 4_000_000.0;
 /// at tick 2 and the dispatch lands at tick 3. Returns the true POI each
 /// tick.
 fn simulate(lag: usize) -> Vec<f64> {
+    simulate_dispatch(lag, DISPATCHED_W)
+}
+
+/// `simulate`, with the dispatch landing at `dispatched` W.
+fn simulate_dispatch(lag: usize, dispatched: f64) -> Vec<f64> {
     let config = EnvelopeConfig {
         ramp_rate_per_sec: 0.10,
         hysteresis_margin: 0.05,
@@ -24,9 +29,9 @@ fn simulate(lag: usize) -> Vec<f64> {
     let mut ctrl = EnvelopeController::new(config, 0.0);
     let mut battery = 0.0;
     let mut meter = std::collections::VecDeque::from(vec![LOAD_W; lag]);
-    (0..40)
+    (0..120)
         .map(|n| {
-            let requested = if n >= 3 { DISPATCHED_W } else { 0.0 };
+            let requested = if n >= 3 { dispatched } else { 0.0 };
             let import_limit = if n >= 2 { 0.0 } else { 2_000_000.0 };
             ctrl.tick(EnvelopeTick {
                 import_limit: Some(import_limit),
@@ -63,6 +68,22 @@ fn a_dispatch_landing_with_the_envelope_doesnt_overshoot_into_export() {
             worst >= LOAD_W - DISPATCHED_W - 1.0,
             "lag {lag}: exported {:.0} W",
             -worst
+        );
+    }
+}
+
+#[test]
+fn an_envelope_only_event_brings_import_to_zero_without_exporting() {
+    // A line-constraint event dispatches nothing (target 0): the envelope
+    // alone drives the battery, from a 1.12 MW violation
+    for lag in 1..=3 {
+        let poi = simulate_dispatch(lag, 0.0);
+        let worst = poi.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(worst >= -1.0, "lag {lag}: exported {:.0} W", -worst);
+        assert!(
+            poi.last().unwrap().abs() < 1_000.0,
+            "lag {lag}: settled at {:.0} W",
+            poi.last().unwrap()
         );
     }
 }
