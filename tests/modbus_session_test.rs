@@ -6,7 +6,7 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::asyncapi::types::ModbusTcpBinding;
-use ems_industrial_gateway::modbus::client::{channel, read_on};
+use ems_industrial_gateway::modbus::client::{channel, read_on, write_setpoint};
 use rodbus::server::{
     AddressFilter, RequestHandler, ServerHandle, ServerHandlerMap, spawn_tcp_server_task,
 };
@@ -27,6 +27,13 @@ impl RequestHandler for Meter {
         (address < 4)
             .then_some(100 + address)
             .ok_or(ExceptionCode::IllegalDataAddress)
+    }
+
+    fn write_multiple_registers(
+        &mut self,
+        _values: rodbus::server::WriteRegisters,
+    ) -> Result<(), ExceptionCode> {
+        Ok(())
     }
 }
 
@@ -107,6 +114,36 @@ async fn a_modbus_exception_fails_at_once() -> Result<()> {
     assert!(result.is_err());
     assert!(
         started.elapsed() < Duration::from_millis(500),
+        "took {:?}",
+        started.elapsed()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn setpoint_writes_reuse_one_session_and_land_at_once() -> Result<()> {
+    // Arrange — a rack's setpoint (int32, FC16), through a counting relay
+    let (rack, _server) = spawn_meter().await?;
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let port = spawn_counting_relay(rack, accepted.clone()).await?;
+    let binding: ModbusTcpBinding = serde_json::from_value(json!({
+        "host": "127.0.0.1", "port": port, "unit_id": "1", "function_code": 16,
+        "address": 0, "data_type": "int32", "scale": 1.0, "offset": 0.0,
+    }))?;
+    write_setpoint(&binding, 100_000.0, None, None).await?;
+    // Act — the envelope writes every tick
+    let started = Instant::now();
+    for watts in [110_000.0, 120_000.0, 130_000.0] {
+        write_setpoint(&binding, watts, None, None).await?;
+    }
+    // Assert — one session, and no connect-then-retry delay per write
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "TCP sessions opened to one rack"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
         "took {:?}",
         started.elapsed()
     );

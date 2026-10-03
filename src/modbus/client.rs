@@ -13,6 +13,8 @@ use crate::modbus::sunspec::apply_sunssf;
 use crate::modbus::transport::{read_registers, tcp_channel, tls_channel, write_registers};
 use anyhow::{Context, Result};
 use rodbus::client::Channel;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 pub use crate::modbus::codec::{
     ModbusDataType, WordOrder, apply_scale_offset, decode_int32, encode_int32, to_raw,
@@ -68,8 +70,34 @@ pub async fn write_setpoint(
 ) -> Result<()> {
     let function = write_function(b.function_code, b.data_type).map_err(anyhow::Error::msg)?;
     let words = encode_raw(to_raw(value, b.scale, b.offset), b.data_type, b.word_order);
-    let channel = channel(b, trust, creds)?;
+    let channel = write_channel(b, trust, creds)?;
     write_registers(channel, unit_id(b)?, b.address, &words, function).await
+}
+
+/// One open session per device for writes, kept across writes.
+///
+/// Reason: a session per write connected after its first request went out,
+/// so every write failed, backed off 500 ms and landed late. The envelope
+/// writes each rack every tick; late writes skewed what the battery
+/// delivered.
+fn write_channel(
+    b: &ModbusTcpBinding,
+    trust: Option<&DeviceTrust>,
+    creds: Option<&GatewayCredentials>,
+) -> Result<Channel> {
+    type Key = (String, u16, bool);
+    static SESSIONS: LazyLock<Mutex<HashMap<Key, Channel>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let secure = matches!(
+        (trust, creds),
+        (Some(DeviceTrust::TlsMutual { .. }), Some(_))
+    );
+    let key = (b.host.clone(), b.port, secure);
+    if let Some(ch) = SESSIONS.lock().unwrap().get(&key) {
+        return Ok(ch.clone());
+    }
+    let ch = channel(b, trust, creds)?;
+    Ok(SESSIONS.lock().unwrap().entry(key).or_insert(ch).clone())
 }
 
 /// Plain TCP read of `count` holding registers (FC3) at `addr`.
