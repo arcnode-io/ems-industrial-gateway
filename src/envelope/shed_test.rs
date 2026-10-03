@@ -103,3 +103,24 @@ fn a_cap_that_failed_to_write_is_proposed_again() {
     c.confirm(90.0);
     assert_eq!(c.tick(&tick(30_000.0)), Some(80.0));
 }
+
+#[test]
+fn import_still_falling_means_storage_is_still_covering_so_no_shed() {
+    // Arrange — battery ramping in: import over the limit but shrinking
+    // 1 kW a tick, for longer than the dwell, down to 20 kW
+    let mut c = controller();
+    let ramping: Vec<Option<f64>> = (0..=40)
+        .map(|n| {
+            let p = c.tick(&tick(60_000.0 - 1_000.0 * f64::from(n)));
+            if let Some(p) = p {
+                c.confirm(p);
+            }
+            p
+        })
+        .collect();
+    // Assert — nothing shed while storage was still closing the gap
+    assert!(ramping.iter().all(Option::is_none), "{ramping:?}");
+    // Act — storage stops (floor): import holds flat; the dwell starts now
+    assert_eq!(run(&mut c, tick(20_000.0), 29), None);
+    assert!(c.tick(&tick(20_000.0)).is_some());
+}

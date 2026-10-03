@@ -14,6 +14,10 @@
 use crate::envelope::inputs::EnvelopeConfig;
 use std::time::Duration;
 
+/// A tick-on-tick drop in import smaller than this fraction of the fleet's
+/// max counts as flat: meter noise, not storage still ramping.
+const SHRINK_DEADBAND: f64 = 0.001;
+
 /// One tick's inputs.
 #[derive(Debug, Clone, Copy)]
 pub struct ShedTick {
@@ -43,6 +47,9 @@ pub struct ShedController {
     over_for: Duration,
     /// How long import has had recovery headroom while shed.
     clear_for: Duration,
+    /// Last tick's import over the limit, to tell storage still closing the
+    /// gap from storage done.
+    last_over: Option<f64>,
 }
 
 impl ShedController {
@@ -53,6 +60,7 @@ impl ShedController {
             percent: None,
             over_for: Duration::ZERO,
             clear_for: Duration::ZERO,
+            last_over: None,
         }
     }
 
@@ -76,6 +84,18 @@ impl ShedController {
             current + (exported * watts_to_percent).min(step)
         } else if over > 0.0 {
             self.clear_for = Duration::ZERO;
+            // Reason: lever order. While import is still falling, storage is
+            // still closing the gap, so the dwell restarts; compute only
+            // sheds what storage evidently can't cover. Once shedding has
+            // begun its own cuts shrink import, so this only gates the start.
+            let storage_closing = self
+                .last_over
+                .is_some_and(|prev| prev - over > SHRINK_DEADBAND * t.fleet_max_w);
+            self.last_over = Some(over);
+            if storage_closing && self.over_for < self.config.hysteresis_dwell {
+                self.over_for = Duration::ZERO;
+                return None;
+            }
             self.over_for += t.dt;
             if self.over_for < self.config.hysteresis_dwell {
                 return None;
@@ -102,10 +122,11 @@ impl ShedController {
         self.percent = Some(percent);
     }
 
-    /// Clear both dwell timers.
+    /// Clear both dwell timers and the import trend.
     fn reset(&mut self) {
         self.over_for = Duration::ZERO;
         self.clear_for = Duration::ZERO;
+        self.last_over = None;
     }
 }
 
