@@ -18,9 +18,13 @@ pub fn reductions_first(
     changed
 }
 
+/// Smallest shrink, as a fraction of the child's output, that is a handoff.
+const HANDOFF_MIN_FRACTION: f64 = 0.01;
+
 /// Which of this tick's (already `reductions_first`-ordered) child writes
-/// to send, and whether growth was held back. When shares both shrink and
-/// grow, only the shrinks go now and the growth waits one tick.
+/// to send, and whether growth was held back. When a share materially
+/// shrinks while another grows, only the shrinks go now and the growth
+/// waits one tick.
 pub fn handoff_batch(
     changed: Vec<(String, f64)>,
     last: &HashMap<String, f64>,
@@ -32,7 +36,7 @@ pub fn handoff_batch(
     // under-delivery instead of both racks on the bus. At most one tick —
     // SoC drift shrinks some share nearly every tick and would otherwise
     // starve the growing rack.
-    let shrinks = changed.iter().any(|c| growth(c, last) < 0.0);
+    let shrinks = changed.iter().any(|c| material_shrink(c, last));
     let grows = changed.iter().any(|c| growth(c, last) > 0.0);
     if shrinks && grows && !deferred_last_tick {
         let batch = changed
@@ -42,6 +46,16 @@ pub fn handoff_batch(
         return (batch, true);
     }
     (changed, false)
+}
+
+/// A shrink big enough to be a handoff: more than `HANDOFF_MIN_FRACTION` of
+/// the child's last output. Reason: SoC drift moves a few hundred watts
+/// between racks nearly every tick. Deferring those re-armed the envelope's
+/// approach hold each tick and froze the battery 355 kW short on the demo,
+/// for an overlap risk no bigger than the drift itself.
+fn material_shrink(c: &(String, f64), last: &HashMap<String, f64>) -> bool {
+    let previous = last.get(&c.0).map_or(0.0, |p| p.abs());
+    -growth(c, last) > HANDOFF_MIN_FRACTION * previous
 }
 
 /// How much a child's write grows its output magnitude; a child never

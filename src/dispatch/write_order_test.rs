@@ -100,3 +100,36 @@ fn growth_with_nothing_shrinking_goes_straight_out() {
     assert_eq!(batch, changed);
     assert!(!deferred);
 }
+
+#[test]
+fn soc_drift_between_racks_is_not_a_handoff() {
+    // Arrange — the split rebalances by a few hundred watts on SoC drift
+    // while the module holds ~764 kW: one rack shrinks 270 W, one grows
+    let last = HashMap::from([
+        ("rack_1".to_string(), 387_620.0),
+        ("rack_2".to_string(), 376_700.0),
+    ]);
+    let changed = shares(&[("rack_1", 387_350.0), ("rack_2", 376_970.0)]);
+    // Act
+    let (batch, deferred) = handoff_batch(changed, &last, false);
+    // Assert — both written now; deferring every drift tick froze the
+    // envelope's approach (the hold re-armed each tick)
+    assert!(!deferred);
+    assert_eq!(batch.len(), 2);
+}
+
+#[test]
+fn a_gentle_handoff_near_the_floor_is_still_a_handoff() {
+    // Arrange — rack_2 nearly at its floor, delivering 20 kW, steps down to
+    // 15 kW while rack_1 picks it up: small in watts, 25% of rack_2's output
+    let last = HashMap::from([
+        ("rack_1".to_string(), 1_090_000.0),
+        ("rack_2".to_string(), 20_000.0),
+    ]);
+    let changed = shares(&[("rack_2", 15_000.0), ("rack_1", 1_095_000.0)]);
+    // Act
+    let (batch, deferred) = handoff_batch(changed, &last, false);
+    // Assert — the drop goes now, the growth waits a tick
+    assert!(deferred);
+    assert_eq!(batch, shares(&[("rack_2", 15_000.0)]));
+}
