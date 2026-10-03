@@ -270,28 +270,20 @@ fn spawn_task_set(
         let (client, cancel) = (client.clone(), parent.child_token());
         handles.spawn(poller::run_device(points, client, cancel, trust, creds));
     }
+    let mut shed_configs = Vec::new();
     for (device_id, commands) in &spec.x_command_source {
         for source in commands.values() {
             if let ProtocolBinding::PowerCap(p) = &source.binding {
                 let key = format!("{}_{}", source.verb, source.target);
                 let creds = cfg.gateway_credentials.clone();
                 // Guarded only when the DTM enabled compute shedding.
-                if let Some(c) =
-                    ShedTaskConfig::from_binding(device_id, &key, p, &cfg.site_id, creds)
-                {
-                    let devices = (device_channels.clone(), device_trust.clone());
-                    let h = shed_task::spawn(
-                        c,
-                        cache.clone(),
-                        last_requested.clone(),
-                        devices,
-                        parent.child_token(),
-                    );
-                    handles.spawn(async move {
-                        let _ = h.await;
-                    });
-                    info!(%device_id, %key, "compute shed task spawned");
-                }
+                shed_configs.extend(ShedTaskConfig::from_binding(
+                    device_id,
+                    &key,
+                    p,
+                    &cfg.site_id,
+                    creds,
+                ));
                 continue;
             }
             let ProtocolBinding::Distribute(d) = &source.binding else {
@@ -342,6 +334,21 @@ fn spawn_task_set(
             spawned_envelope += 1;
             info!(%device_id, %channel_key, guarded, "distribute rebalance task spawned");
         }
+    }
+    for c in ShedTaskConfig::per_poi(shed_configs) {
+        let modules = c.modules.len();
+        let devices = (device_channels.clone(), device_trust.clone());
+        let h = shed_task::spawn(
+            c,
+            cache.clone(),
+            last_requested.clone(),
+            devices,
+            parent.child_token(),
+        );
+        handles.spawn(async move {
+            let _ = h.await;
+        });
+        info!(modules, "compute shed task spawned");
     }
 
     let der_dispatch_source_topics =

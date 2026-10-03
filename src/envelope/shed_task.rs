@@ -24,14 +24,24 @@ pub type Devices = (
     Arc<RwLock<HashMap<String, DeviceTrust>>>,
 );
 
-/// What one shed task runs on, resolved from a guarded `power_cap` binding.
-pub struct ShedTaskConfig {
+/// One compute module's guarded power cap.
+pub struct CapModule {
     /// The compute_module.
     pub device_id: String,
     /// `{verb}_{target}`: where the operator's own fleet cap is recorded.
     pub channel_key: String,
     /// Children and their ranges.
     pub binding: PowerCapBinding,
+}
+
+/// What one shed task runs on: every guarded power cap behind one POI.
+///
+/// Reason: one controller per POI, not per module. Each module answering the
+/// whole site's import would cut it once per module and drive the site into
+/// export; one site-wide percentage covers it once.
+pub struct ShedTaskConfig {
+    /// The modules this POI's shed drives.
+    pub modules: Vec<CapModule>,
     /// Dwell, margin, ramp.
     pub control: EnvelopeConfig,
     /// POI `active_power` topic, `{site_id}` substituted.
@@ -55,8 +65,11 @@ impl ShedTaskConfig {
         creds: Option<GatewayCredentials>,
     ) -> Option<Self> {
         Some(Self {
-            device_id: device_id.to_string(),
-            channel_key: channel_key.to_string(),
+            modules: vec![CapModule {
+                device_id: device_id.to_string(),
+                channel_key: channel_key.to_string(),
+                binding: b.clone(),
+            }],
             control: EnvelopeConfig {
                 ramp_rate_per_sec: b.ramp_rate_per_sec?,
                 hysteresis_margin: b.hysteresis_margin?,
@@ -65,9 +78,25 @@ impl ShedTaskConfig {
             poi_topic: substitute_site_id(b.poi_active_power_topic.as_ref()?, site_id),
             import_limit_topic: substitute_site_id(b.import_limit_topic.as_ref()?, site_id),
             export_limit_topic: substitute_site_id(b.export_limit_topic.as_ref()?, site_id),
-            binding: b.clone(),
             creds,
         })
+    }
+
+    /// Merge per-module configs into one per POI (and envelope); the first
+    /// module's dwell, margin and ramp govern its group.
+    pub fn per_poi(configs: Vec<Self>) -> Vec<Self> {
+        let mut groups: Vec<Self> = Vec::new();
+        for c in configs {
+            let same = |g: &&mut Self| {
+                (&g.poi_topic, &g.import_limit_topic, &g.export_limit_topic)
+                    == (&c.poi_topic, &c.import_limit_topic, &c.export_limit_topic)
+            };
+            match groups.iter_mut().find(same) {
+                Some(g) => g.modules.extend(c.modules),
+                None => groups.push(c),
+            }
+        }
+        groups
     }
 }
 
@@ -87,16 +116,16 @@ pub fn spawn(
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    let Some(t) = inputs(&cfg, &cache, &last_requested, &mut last_poi).await else {
+                    let Some(t) = inputs(&cfg, &cache, &mut last_poi) else {
                         continue; // hold — an input missing or the POI reading not new
                     };
                     let Some(percent) = controller.tick(&t) else { continue };
-                    info!(device_id = %cfg.device_id, percent, "compute shed: fleet cap");
-                    let caps = power_cap::child_caps(&cfg.binding, percent);
+                    info!(poi = %cfg.poi_topic, percent, modules = cfg.modules.len(), "compute shed: fleet cap");
+                    let caps = module_caps(&cfg, percent, &last_requested).await;
                     let (channels, trust) = (devices.0.read().await, devices.1.read().await);
                     match power_cap::write_caps(caps, &channels, &trust, cfg.creds.as_ref()).await {
                         Ok(()) => controller.confirm(percent),
-                        Err(e) => warn!(device_id = %cfg.device_id, error = format!("{e:#}"), "compute shed write failed"),
+                        Err(e) => warn!(poi = %cfg.poi_topic, error = format!("{e:#}"), "compute shed write failed"),
                     }
                 }
             }
@@ -106,10 +135,9 @@ pub fn spawn(
 
 /// This tick's inputs, or `None` to hold. Only a POI reading no earlier tick
 /// used counts, with its real age as `dt`.
-async fn inputs(
+fn inputs(
     cfg: &ShedTaskConfig,
     cache: &InputCache,
-    last_requested: &LastRequestedSetpoints,
     last_poi: &mut Option<Instant>,
 ) -> Option<ShedTick> {
     let number = |topic: &str| cache.get(topic).and_then(|e| Some((as_number(&e.0)?, e.1)));
@@ -122,21 +150,37 @@ async fn inputs(
         None => Duration::from_secs(1),
     };
     *last_poi = Some(received_at);
-    let requested_percent = last_requested
-        .read()
-        .await
-        .get(&cfg.device_id)
-        .and_then(|m| m.get(&cfg.channel_key))
-        .copied()
-        .unwrap_or(100.0);
-    let children = &cfg.binding.children;
+    let children = || cfg.modules.iter().flat_map(|m| &m.binding.children);
     Some(ShedTick {
         poi_active_power: poi,
         import_limit,
         export_limit,
-        requested_percent,
-        fleet_max_w: children.iter().map(|c| c.max_w).sum(),
-        fleet_min_w: children.iter().map(|c| c.min_w).sum(),
+        // Shedding restores to full; each module's own operator cap still
+        // limits its GPUs when written (`module_caps`).
+        requested_percent: 100.0,
+        fleet_max_w: children().map(|c| c.max_w).sum(),
+        fleet_min_w: children().map(|c| c.min_w).sum(),
         dt,
     })
+}
+
+/// Every module's caps at the site's `percent`, never above the cap its
+/// operator set on that module.
+async fn module_caps(
+    cfg: &ShedTaskConfig,
+    percent: f64,
+    last_requested: &LastRequestedSetpoints,
+) -> Vec<(String, String, f64)> {
+    let requested = last_requested.read().await;
+    cfg.modules
+        .iter()
+        .flat_map(|m| {
+            let operator = requested
+                .get(&m.device_id)
+                .and_then(|c| c.get(&m.channel_key))
+                .copied()
+                .unwrap_or(100.0);
+            power_cap::child_caps(&m.binding, percent.min(operator))
+        })
+        .collect()
 }
