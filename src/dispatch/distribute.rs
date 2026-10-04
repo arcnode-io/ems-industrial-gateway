@@ -12,6 +12,7 @@ use crate::synthetic::{InputCache, as_number};
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use std::collections::HashMap;
+use tracing::info;
 
 /// Resolve + execute a distribute command: `compute_shares` then
 /// `write_shares` for every child. On an envelope-guarded module, nothing:
@@ -20,8 +21,8 @@ use std::collections::HashMap;
 /// Reason: a direct write bypasses the envelope; a dispatch landing while it
 /// binds yanked the battery off what the limit needed. The reactive path (a real inbound
 /// command) always writes every eligible child; the rebalance-tick path
-/// (`envelope::task`) calls the two halves separately so it can write only
-/// the children whose share actually changed since the last tick.
+/// (`envelope::task`) calls the two halves separately so it can order a
+/// handoff's writes.
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_distribute(
     binding: &DistributeBinding,
@@ -34,6 +35,10 @@ pub async fn dispatch_distribute(
     cache: &InputCache,
 ) -> Result<()> {
     if envelope::envelope_guard_config(binding).is_some() {
+        info!(
+            target,
+            "envelope-guarded: its envelope task writes the racks"
+        );
         return Ok(());
     }
     let shares = compute_shares(binding, target, site_id, cache)?;

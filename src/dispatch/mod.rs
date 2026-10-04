@@ -186,7 +186,7 @@ pub async fn handle_command(
     .await
     {
         Ok(()) => {
-            info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch write succeeded");
+            info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch command applied");
             publish_event(client, &events, &frame.command_id, Phase::Done, None).await
         }
         Err(err) => {
