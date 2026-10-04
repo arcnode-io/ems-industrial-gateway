@@ -165,3 +165,35 @@ fn without_spare_storage_compute_stays_shed_while_the_limit_is_met() {
     let mut c = shed_to_floor();
     assert_eq!(run(&mut c, tick(0.0), 60), None);
 }
+
+#[test]
+fn spare_storage_keeps_taking_compute_back_while_the_poi_tracks_the_limit() {
+    // Arrange — each raise lands on the meter before the battery catches
+    // up, so the POI sits a little over the limit (300 W, inside the 5 kW
+    // margin) while storage still has 60 kW spare
+    let mut c = shed_to_floor();
+    let tracking = ShedTick {
+        storage_spare_w: 60_000.0,
+        ..tick(300.0)
+    };
+    // Act — dwell (30 s), then 30 s of hand-back
+    let last = run(&mut c, tracking, 60);
+    // Assert — 31 raises of 1.7% (5 kW margin over 3 s, rounded up to the
+    // 0.1% grid) on top of the 20% floor
+    let last = last.expect("hands back");
+    assert!((70.0..=73.0).contains(&last), "{last}");
+}
+
+#[test]
+fn import_past_the_margin_still_sheds_with_spare_storage() {
+    // Arrange — spare that isn't showing up at the POI (6 kW over a 5 kW
+    // margin) gets no benefit of the doubt
+    let mut c = controller();
+    let over = ShedTick {
+        storage_spare_w: 60_000.0,
+        ..tick(6_000.0)
+    };
+    // Act + Assert — cuts once the dwell has passed
+    let cut = run(&mut c, over, 31).expect("sheds");
+    assert!(cut < 100.0, "{cut}");
+}

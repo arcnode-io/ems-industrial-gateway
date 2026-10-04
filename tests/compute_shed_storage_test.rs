@@ -175,10 +175,11 @@ async fn spare_storage_takes_shed_compute_back() -> Result<()> {
     // Assert — nothing to hand the load to: the shed holds
     assert!(held.iter().rev().take(4).all(|&c| c <= shed), "{held:?}");
 
-    // Act — the racks have charge to spare
+    // Act — the racks have charge to spare; the POI tracks 50 W over the
+    // limit (inside the 100 W margin) as the battery follows each raise
     let raised = timeout(Duration::from_secs(20), async {
         loop {
-            second(&feed, 0.0, 60.0).await?;
+            second(&feed, 50.0, 60.0).await?;
             let caps = caps_written(&bmc).await;
             if caps.iter().any(|&c| c > shed) {
                 return anyhow::Ok(caps);

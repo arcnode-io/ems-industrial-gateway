@@ -98,12 +98,17 @@ impl ShedController {
         let step = self.config.ramp_rate_per_sec * 100.0 * t.dt.as_secs_f64();
         let over = t.poi_active_power - t.import_limit;
         let exported = -t.poi_active_power - t.export_limit;
-        let headroom =
-            t.import_limit - t.poi_active_power - self.config.hysteresis_margin * t.fleet_max_w;
+        let margin_w = self.config.hysteresis_margin * t.fleet_max_w;
+        let headroom = t.import_limit - t.poi_active_power - margin_w;
+        // Reason: handing load back to storage puts the POI a little over the
+        // limit until the battery's servo catches up (each raise lands on the
+        // meter first). Within the margin, with spare storage, that's the
+        // servo tracking, not import storage can't cover.
+        let tracking = over <= margin_w && t.storage_spare_w > 0.0;
         let target = if exported > 0.0 {
             self.reset();
             current + (exported * watts_to_percent).min(step)
-        } else if over > 0.0 {
+        } else if over > 0.0 && !tracking {
             self.clear_for = Duration::ZERO;
             // Reason: lever order. While import is still falling, storage is
             // still closing the gap, so the dwell restarts; compute only
@@ -147,7 +152,7 @@ impl ShedController {
 
     /// Watts compute may take back this tick, or `None` for none: the import
     /// headroom once the limit lifts, else what storage could pick up while
-    /// the limit is merely met.
+    /// the POI tracks the limit (within the margin).
     ///
     /// Reason: lever order runs both ways. Compute is the last resort, so
     /// spare storage takes its load back first. That hand-back is limited to
