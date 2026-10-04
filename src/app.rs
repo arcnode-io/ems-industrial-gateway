@@ -271,7 +271,6 @@ fn spawn_task_set(
         handles.spawn(poller::run_device(points, client, cancel, trust, creds));
     }
     let mut shed_configs = Vec::new();
-    let mut storage = Vec::new();
     for (device_id, commands) in &spec.x_command_source {
         for source in commands.values() {
             if let ProtocolBinding::PowerCap(p) = &source.binding {
@@ -312,9 +311,6 @@ fn spawn_task_set(
             });
             let guarded = guard.is_some();
             let channel_key = format!("{}_{}", source.verb, source.target);
-            if guarded {
-                storage.push(d.clone());
-            }
             let task_cfg = envelope::EnvelopeTaskConfig {
                 device_id: device_id.clone(),
                 channel_key: channel_key.clone(),
@@ -339,8 +335,7 @@ fn spawn_task_set(
             info!(%device_id, %channel_key, guarded, "distribute rebalance task spawned");
         }
     }
-    for mut c in ShedTaskConfig::per_poi(shed_configs) {
-        c.storage = storage.clone();
+    for c in ShedTaskConfig::per_poi(shed_configs) {
         let modules = c.modules.len();
         let devices = (device_channels.clone(), device_trust.clone());
         let h = shed_task::spawn(
