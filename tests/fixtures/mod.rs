@@ -3,6 +3,8 @@
 // Reason: per-test-binary modules — each `tests/*.rs` consumes a subset.
 // `#[allow(dead_code)]` silences "unused" warnings on the other binary.
 #[allow(dead_code)]
+pub mod bmc;
+#[allow(dead_code)]
 pub mod catalog;
 #[allow(dead_code)]
 pub mod containers;

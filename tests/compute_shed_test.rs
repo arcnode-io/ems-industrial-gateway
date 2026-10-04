@@ -7,6 +7,7 @@ mod fixtures;
 
 use anyhow::Result;
 use ems_industrial_gateway::{app, config::Config};
+use fixtures::bmc::caps_written;
 use fixtures::containers::{start_hivemq, unique_network};
 use fixtures::spec_stub::spawn_asyncapi_stub;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, Message};
@@ -50,20 +51,6 @@ fn spec(bmc_port: u16) -> Value {
             } },
         },
     })
-}
-
-/// Cap values the BMC has been sent so far.
-async fn caps_written(bmc: &MockServer) -> Vec<f64> {
-    bmc.received_requests()
-        .await
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
-        .filter_map(|b| {
-            b.pointer("/PowerLimitWatts/SetPoint")
-                .and_then(Value::as_f64)
-        })
-        .collect()
 }
 
 /// Publish the envelope and a POI reading every 300 ms until `done` holds.

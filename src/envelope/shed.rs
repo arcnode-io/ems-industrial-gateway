@@ -18,6 +18,10 @@ use std::time::Duration;
 /// max counts as flat: meter noise, not storage still ramping.
 const SHRINK_DEADBAND: f64 = 0.001;
 
+/// The longest POI meter lag the envelope's servos are tuned for (see
+/// `poi_servo`).
+const METER_LAG_SECS: f64 = 3.0;
+
 /// Cap resolution: 0.1% is 1 W on a 1000 W GPU limit, the device's own.
 const STEP_PERCENT: f64 = 0.1;
 
@@ -46,6 +50,9 @@ pub struct ShedTick {
     pub fleet_max_w: f64,
     /// Sum of every child's min cap.
     pub fleet_min_w: f64,
+    /// Discharge the site's storage could add right now (capability above
+    /// its effective floor minus what it delivers); 0 when none.
+    pub storage_spare_w: f64,
     /// Time since the last tick.
     pub dt: Duration,
 }
@@ -115,13 +122,15 @@ impl ShedController {
                 return None;
             }
             current - (over * watts_to_percent).min(step)
-        } else if headroom > 0.0 && current < t.requested_percent {
+        } else if let Some(room) = self.room_to_restore(t, headroom)
+            && current < t.requested_percent
+        {
             self.over_for = Duration::ZERO;
             self.clear_for += t.dt;
             if self.clear_for < self.config.hysteresis_dwell {
                 return None;
             }
-            current + (headroom * watts_to_percent).min(step)
+            current + (room * watts_to_percent).min(step)
         } else {
             self.reset();
             current
@@ -134,6 +143,24 @@ impl ShedController {
     /// Record that `percent` reached every device.
     pub fn confirm(&mut self, percent: f64) {
         self.percent = Some(percent);
+    }
+
+    /// Watts compute may take back this tick, or `None` for none: the import
+    /// headroom once the limit lifts, else what storage could pick up while
+    /// the limit is merely met.
+    ///
+    /// Reason: lever order runs both ways. Compute is the last resort, so
+    /// spare storage takes its load back first. That hand-back is limited to
+    /// what the battery's servo can follow through the meter's lag (the
+    /// margin over `METER_LAG_SECS` per second), so import stays within the
+    /// margin while the battery catches up.
+    fn room_to_restore(&self, t: &ShedTick, headroom: f64) -> Option<f64> {
+        if headroom > 0.0 {
+            return Some(headroom);
+        }
+        let margin_w = self.config.hysteresis_margin * t.fleet_max_w;
+        let follow_w = margin_w / METER_LAG_SECS * t.dt.as_secs_f64();
+        (t.storage_spare_w > 0.0).then(|| t.storage_spare_w.min(follow_w))
     }
 
     /// Clear both dwell timers and the import trend.

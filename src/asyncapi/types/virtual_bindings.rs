@@ -47,7 +47,7 @@ pub struct WeightedPair {
 /// envelope guard) has none of them; nothing about a device's own
 /// `set_active_power` command changes shape depending on whether it's
 /// envelope-guarded.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DistributeBinding {
     /// Allocation policy name: `equal_split` or `soc_weighted`.

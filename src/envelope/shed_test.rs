@@ -22,6 +22,7 @@ fn tick(poi_w: f64) -> ShedTick {
         requested_percent: 100.0,
         fleet_max_w: 100_000.0,
         fleet_min_w: 20_000.0,
+        storage_spare_w: 0.0,
         dt: Duration::from_secs(1),
     }
 }
@@ -134,4 +135,33 @@ fn a_small_gap_is_cut_by_no_more_than_the_gap() {
     let cut = c.tick(&tick(830.0));
     // Assert — 0.8%, not a whole 1% that would cut 1 kW and export 170 W
     assert_eq!(cut, Some(99.2));
+}
+
+/// Shed to the 20% floor by a 500 kW gap storage couldn't cover.
+fn shed_to_floor() -> ShedController {
+    let mut c = controller();
+    run(&mut c, tick(500_000.0), 60);
+    c
+}
+
+#[test]
+fn spare_storage_takes_compute_back_while_the_limit_is_met() {
+    // Arrange — operator released the battery mid-event: the limit is met
+    // exactly (POI 0 against 0) and storage has 60 kW it isn't using
+    let mut c = shed_to_floor();
+    let met = ShedTick {
+        storage_spare_w: 60_000.0,
+        ..tick(0.0)
+    };
+    // Act + Assert — after the dwell, caps rise by no more than the battery
+    // can follow through the meter's lag: margin (5 kW) over 3 s per tick
+    assert_eq!(run(&mut c, met, 29), None);
+    let first = c.tick(&met).expect("hands back");
+    assert!((20.0..=21.7).contains(&first), "{first}");
+}
+
+#[test]
+fn without_spare_storage_compute_stays_shed_while_the_limit_is_met() {
+    let mut c = shed_to_floor();
+    assert_eq!(run(&mut c, tick(0.0), 60), None);
 }
