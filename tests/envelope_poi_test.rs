@@ -23,6 +23,8 @@ const MODULE_ID: &str = "bess_module_1";
 const METER_ID: &str = "meter_01";
 const RACKS: [&str; 2] = ["rack_1", "rack_2"];
 const REGISTER_ADDR: u16 = 50;
+/// The site's load at the POI.
+const SITE_LOAD_W: f64 = 72_800.0;
 
 fn rack_command(addr: SocketAddr) -> Value {
     json!({
@@ -126,12 +128,12 @@ async fn zero_export_envelope_lets_the_bess_discharge_up_to_site_load() -> Resul
         publish(&op, rack, "operating_state/none", 0.0).await?;
         publish(&op, rack, "state_of_charge/percent", 50.0).await?;
     }
-    // A load site's zero-export envelope, 72.8 kW of site load: the module
-    // discharges 50 kW and the POI still imports 22.8 kW.
+    // A load site's zero-export envelope, 72.8 kW of site load, battery idle:
+    // the POI imports all of it.
     publish(&op, "operating_envelope", "import_limit/watts", 5_378_000.0).await?;
     publish(&op, "operating_envelope", "export_limit/watts", 0.0).await?;
-    publish(&op, MODULE_ID, "active_power/watts", 50_000.0).await?;
-    publish(&op, METER_ID, "active_power/watts", 22_800.0).await?;
+    publish(&op, MODULE_ID, "active_power/watts", 0.0).await?;
+    publish(&op, METER_ID, "active_power/watts", SITE_LOAD_W).await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Act — a 50 kW discharge command, well under the 72.8 kW site load.
@@ -150,12 +152,24 @@ async fn zero_export_envelope_lets_the_bess_discharge_up_to_site_load() -> Resul
         anyhow::bail!("dispatch_state stream closed")
     })
     .await??;
-    // Let the envelope task tick several times after the direct write.
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    // The envelope task applies the command at the POI servo's pace, on fresh
+    // meter readings: a live meter, POI = load − what the racks deliver.
+    let reached = timeout(Duration::from_secs(40), async {
+        loop {
+            let (r1, r2) = (rack_watts(port1).await?, rack_watts(port2).await?);
+            if (r1, r2) == (25_000, 25_000) {
+                return anyhow::Ok(());
+            }
+            let poi = SITE_LOAD_W - f64::from(r1 + r2);
+            publish(&op, METER_ID, "active_power/watts", poi).await?;
+            publish(&op, MODULE_ID, "active_power/watts", f64::from(r1 + r2)).await?;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await;
 
-    // Assert — the envelope left the discharge alone: 25 kW per rack, not 0.
-    assert_eq!(rack_watts(port1).await?, 25_000);
-    assert_eq!(rack_watts(port2).await?, 25_000);
+    // Assert — the envelope let the discharge through: 25 kW per rack, not 0.
+    assert!(reached.is_ok(), "racks never reached 25 kW each");
 
     cancel.cancel();
     gateway.await??;
