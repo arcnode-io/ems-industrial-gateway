@@ -373,14 +373,20 @@ fn spawn_task_set(
 
     let site_distribution_cfg = der_dispatch::SiteDistributionConfig {
         site_id: cfg.site_id.clone(),
-        target_topic: format!(
-            "sites/{}/devices/der_dispatch/measurements/target_active_power/watts",
-            cfg.site_id
-        ),
-        event_active_topic: format!(
-            "sites/{}/devices/der_dispatch/measurements/event_active/none",
-            cfg.site_id
-        ),
+        topics: der_dispatch::PostureTopics {
+            event_active: format!(
+                "sites/{}/devices/der_dispatch/measurements/event_active/none",
+                cfg.site_id
+            ),
+            target_present: format!(
+                "sites/{}/devices/der_dispatch/measurements/target_setpoint_present/none",
+                cfg.site_id
+            ),
+            target: format!(
+                "sites/{}/devices/der_dispatch/measurements/target_active_power/watts",
+                cfg.site_id
+            ),
+        },
         tick_hz: DEFAULT_POLL_HZ,
         creds: cfg.gateway_credentials.clone(),
     };

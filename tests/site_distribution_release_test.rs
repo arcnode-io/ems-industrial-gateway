@@ -183,6 +183,13 @@ async fn ending_an_event_restores_each_modules_pre_event_setpoint() -> Result<()
     .await?;
     publish(
         &op,
+        "der_dispatch/measurements/target_setpoint_present/none",
+        r#"{"ts":"t","value":true}"#,
+        0,
+    )
+    .await?;
+    publish(
+        &op,
         "der_dispatch/measurements/event_active/none",
         r#"{"ts":"t","value":true}"#,
         0,

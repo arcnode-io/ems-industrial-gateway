@@ -207,6 +207,12 @@ async fn site_target_splits_soc_weighted_across_modules_then_cascades_to_racks()
         0,
     ))
     .await?;
+    der.publish(Message::new(
+        format!("sites/{SITE_ID}/devices/der_dispatch/measurements/target_setpoint_present/none"),
+        r#"{"ts":"t","value":true}"#,
+        0,
+    ))
+    .await?;
 
     // Assert — soc_weighted(70/30) of 400kW = 280k to module_1's rack,
     // 120k to module_2's rack, cascaded through each module's own

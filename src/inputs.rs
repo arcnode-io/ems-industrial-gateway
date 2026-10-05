@@ -24,6 +24,9 @@ pub fn input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
     topics.push(format!(
         "sites/{site_id}/devices/der_dispatch/measurements/event_active/none"
     ));
+    topics.push(format!(
+        "sites/{site_id}/devices/der_dispatch/measurements/target_setpoint_present/none"
+    ));
     topics
 }
 

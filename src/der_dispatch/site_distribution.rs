@@ -19,14 +19,17 @@
 //! the utility let go. On event_active false, each module the event
 //! dispatched is commanded back to its pre-event operator setpoint (0 if
 //! none), unless an operator commanded it mid-event. See `event_memory`.
+//! An event in force with no power setpoint (energize-only) releases the
+//! same way; see `posture`.
 
 use crate::config::GatewayCredentials;
 use crate::der_dispatch::SharedEventMemory;
 use crate::der_dispatch::module_bounds::modules_with_bounds;
 use crate::der_dispatch::module_command::{Devices, dispatch_one};
+use crate::der_dispatch::posture::{Posture, PostureTopics, posture};
 use crate::dispatch::LastRequestedSetpoints;
 use crate::dispatch::allocation::{self, AllocationPolicy};
-use crate::synthetic::{InputCache, as_number};
+use crate::synthetic::InputCache;
 use paho_mqtt::AsyncClient;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -41,10 +44,8 @@ pub(super) const CHANNEL_KEY: &str = "set_active_power";
 pub struct SiteDistributionConfig {
     /// Site slug, substituted into every module's command topic.
     pub site_id: String,
-    /// `sites/{site}/devices/der_dispatch/measurements/target_active_power/watts`.
-    pub target_topic: String,
-    /// `sites/{site}/devices/der_dispatch/measurements/event_active/none`.
-    pub event_active_topic: String,
+    /// der_dispatch's event and setpoint channels.
+    pub topics: PostureTopics,
     /// Tick cadence — matches the module rebalance task's (1 Hz).
     pub tick_hz: f64,
     /// mTLS material for the south-side writes each command ends in.
@@ -130,21 +131,16 @@ async fn tick_once(
     last_requested: &LastRequestedSetpoints,
     memory: &SharedEventMemory,
 ) {
-    let Some(event_active) = cache
-        .get(&cfg.event_active_topic)
-        .and_then(|e| as_number(&e.0))
-    else {
-        return; // hold — event_active not cached yet
+    let target = match posture(&cfg.topics, cache) {
+        Posture::Hold => return,
+        Posture::Release => {
+            release(cfg, cache, mqtt, devices, last_requested, memory).await;
+            return;
+        }
+        Posture::Dispatch(target) => target,
     };
-    if event_active < 0.5 {
-        release(cfg, cache, mqtt, devices, last_requested, memory).await;
-        return;
-    }
     let operator = operator_setpoints(last_requested).await;
     memory.lock().unwrap().begin(|| operator);
-    let Some(target) = cache.get(&cfg.target_topic).and_then(|e| as_number(&e.0)) else {
-        return; // hold — target not cached yet
-    };
 
     let channels = devices.channels.read().await;
     let Some(modules) = modules_with_bounds(&channels, cache, &cfg.site_id, target) else {
