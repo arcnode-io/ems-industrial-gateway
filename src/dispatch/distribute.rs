@@ -5,7 +5,7 @@ use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::allocation::{self, AllocationPolicy, ChildCapacity, OperatingState};
-use crate::dispatch::reserve;
+use crate::dispatch::{rack_limits, reserve};
 use crate::envelope;
 use crate::modbus::client as modbus;
 use crate::synthetic::{InputCache, as_number};
@@ -101,8 +101,9 @@ pub async fn write_shares(
 }
 
 /// Read one child's cached measurements into `ChildCapacity`. `headroom` is
-/// the static bound in the direction of `target` — `power_max` when
-/// discharging/positive, `|power_min|` when charging/negative. `site_id`
+/// its room in the direction of `target`: the static bound (`power_max`
+/// discharging, `|power_min|` charging) capped by its live limit
+/// (`rack_limits`). `site_id`
 /// resolves the `{site_id}` placeholder in the child's cache topics — the
 /// same runtime substitution `app.rs` applies when building the
 /// subscription list these topics were cached under.
@@ -122,15 +123,10 @@ fn resolve_child(
         .get(&state_of_charge_topic)
         .and_then(|e| as_number(&e.0))
         .ok_or_else(|| anyhow!("no cached state_of_charge for {}", c.device_id))?;
-    let headroom = if target < 0.0 {
-        c.power_min.abs()
-    } else {
-        c.power_max
-    };
     Ok(ChildCapacity {
         device_id: c.device_id.clone(),
         operating_state,
-        headroom,
+        headroom: rack_limits::headroom(c, target, site_id, cache),
         state_of_charge,
     })
 }

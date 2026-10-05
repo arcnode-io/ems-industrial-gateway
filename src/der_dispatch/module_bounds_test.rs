@@ -3,7 +3,9 @@
 //! as a module) would under-allocate site power without any visible error.
 
 use super::modules_with_bounds;
-use crate::asyncapi::types::{DistributeBinding, ModbusTcpBinding, ProtocolBinding};
+use crate::asyncapi::types::{
+    ChildAllocation, DistributeBinding, ModbusTcpBinding, ProtocolBinding,
+};
 use crate::modbus::client::{ModbusDataType, WordOrder};
 use crate::synthetic::new_input_cache;
 use std::collections::HashMap;
@@ -136,4 +138,41 @@ fn empty_channels_yields_no_modules() {
     let channels = HashMap::new();
     let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
     assert!(modules.is_empty());
+}
+
+#[test]
+fn a_modules_headroom_is_capped_by_its_racks_live_limits() {
+    // Arrange — two 1,927 kW racks; rack_1 at 10% SoC reports 963.5 kW of
+    // discharge, rack_2 reports nothing (static bound)
+    let cache = new_input_cache();
+    let now = Instant::now();
+    cache.insert(
+        "sites/local_site/devices/bess_module_1/measurements/state_of_charge/percent".to_string(),
+        (serde_json::json!(40.0), now),
+    );
+    cache.insert(
+        "sites/local_site/devices/rack_1/measurements/max_discharge_power/watts".to_string(),
+        (serde_json::json!(963_500.0), now),
+    );
+    let rack = |id: &str| ChildAllocation {
+        device_id: id.to_string(),
+        operating_state_topic: String::new(),
+        state_of_charge_topic: String::new(),
+        power_min: -1_927_000.0,
+        power_max: 1_927_000.0,
+    };
+    let mut module = distribute_binding(-3_854_000.0, 3_854_000.0);
+    if let ProtocolBinding::Distribute(d) = &mut module {
+        d.children = vec![rack("rack_1"), rack("rack_2")];
+    }
+    let channels = HashMap::from([(
+        "bess_module_1".to_string(),
+        HashMap::from([("set_active_power".to_string(), module)]),
+    )]);
+
+    // Act
+    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
+
+    // Assert
+    assert_eq!(modules[0].headroom, 2_890_500.0);
 }

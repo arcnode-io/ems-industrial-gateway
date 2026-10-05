@@ -4,6 +4,7 @@
 //! topology change, so subscriptions follow the topology.
 
 use crate::asyncapi::types::{AsyncApiSpec, ProtocolBinding};
+use crate::dispatch::rack_limits;
 use crate::envelope;
 use std::collections::BTreeSet;
 
@@ -48,7 +49,7 @@ fn collect_synthetic_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<Str
 
 /// Walk the spec's x-command-source for `distribute` bindings and collect
 /// each child's `operating_state_topic`/`state_of_charge_topic` (with
-/// `{site_id}` substituted). These are read from the cache at dispatch time,
+/// `{site_id}` substituted) and its live power limits (`rack_limits`). These are read from the cache at dispatch time,
 /// not polled — the gateway still needs to be subscribed for them to ever
 /// land in the cache.
 fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<String> {
@@ -59,6 +60,13 @@ fn collect_distribute_input_topics(spec: &AsyncApiSpec, site_id: &str) -> Vec<St
                 for child in &d.children {
                     topics.insert(substitute_site_id(&child.operating_state_topic, site_id));
                     topics.insert(substitute_site_id(&child.state_of_charge_topic, site_id));
+                    for charging in [true, false] {
+                        topics.insert(rack_limits::limit_topic(
+                            site_id,
+                            &child.device_id,
+                            charging,
+                        ));
+                    }
                 }
                 if let Some(reserve) = &d.operator_reserve_topic {
                     topics.insert(substitute_site_id(reserve, site_id));

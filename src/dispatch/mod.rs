@@ -27,6 +27,7 @@ pub mod allocation;
 mod allocation_test;
 mod distribute;
 pub(crate) mod power_cap;
+pub(crate) mod rack_limits;
 mod reserve;
 mod topic;
 mod write_order;
