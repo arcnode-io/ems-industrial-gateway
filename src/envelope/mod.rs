@@ -18,6 +18,7 @@ mod control_law_servo_test;
 mod control_law_step_test;
 #[cfg(test)]
 mod control_law_test;
+pub mod energize;
 pub mod inputs;
 pub mod poi_gate;
 #[cfg(test)]

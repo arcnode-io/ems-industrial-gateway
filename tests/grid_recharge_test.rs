@@ -1,7 +1,7 @@
 //! e2e: grid recharge toward readiness. An idle guarded module below its
 //! readiness SoC charges at its recharge rate between DER events, and stops
-//! the moment an event goes active. High-risk: charging nobody asked for is
-//! import the site never committed to.
+//! the moment an event goes active or the utility says cease to energize.
+//! High-risk: charging nobody asked for is import the site never committed to.
 
 mod fixtures;
 
@@ -163,6 +163,17 @@ async fn an_idle_module_recharges_between_events_and_stops_for_one() -> Result<(
     assert!(
         until_racks_hold(&feed, ports, 1.0, 0).await,
         "kept charging into an event"
+    );
+    // Arrange — back between events, charging again
+    assert!(
+        until_racks_hold(&feed, ports, 0.0, -124_100).await,
+        "never resumed"
+    );
+    // Act + Assert — the utility says cease to energize: 0 W
+    publish(&feed, "der_dispatch", "energize_enabled/none", 0.0).await?;
+    assert!(
+        until_racks_hold(&feed, ports, 0.0, 0).await,
+        "kept energizing after energize went false"
     );
 
     cancel.cancel();

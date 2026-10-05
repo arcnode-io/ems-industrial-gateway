@@ -1,12 +1,9 @@
 //! One async task per `distribute` command (envelope-guarded or plain):
-//! ticks at 1 Hz (matching `active_power`'s poll rate), always recomputes
-//! the SoC-weighted child split from the current requested setpoint (a
-//! child's SoC drifting is enough to rebalance the split even when the
-//! module-level target hasn't changed), applies the envelope control law's
-//! clamp on top when guarded, and writes only the children whose share
-//! actually changed since the last tick — bypassing `handle_command`'s
-//! last-requested-setpoint capture entirely, so this task's own writes can
-//! never look like a new real operator request.
+//! ticks at 1 Hz, splits the module's target across its children (operator
+//! setpoint or recharge, clamped by the envelope when guarded, 0 W while
+//! the DER must cease to energize) and re-asserts every child's share. Its
+//! writes bypass `handle_command`'s last-requested capture, so they never
+//! look like a new operator request.
 
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
@@ -14,8 +11,8 @@ use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
-use crate::envelope::recharge;
 use crate::envelope::writes::WriteState;
+use crate::envelope::{energize, recharge};
 use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -163,6 +160,7 @@ async fn tick_once(
         }
         None => requested_setpoint,
     };
+    let target = energize::target_w(target, site_id, cache);
 
     let ProtocolBinding::Distribute(d) = &cfg.binding else {
         warn!(device_id = %cfg.device_id, "rebalance task's binding is not distribute; nothing to do");
