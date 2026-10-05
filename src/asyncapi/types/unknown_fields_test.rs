@@ -90,9 +90,9 @@ fn an_unknown_field_in_a_nested_entry_fails_the_spec() {
 
 #[test]
 fn a_distribute_binding_with_a_charging_obligation_parses() {
-    // Arrange — readiness 7.0737 MWh, recharge 248.2 kW (ERCOT heavy preset)
+    // Arrange — readiness 91.8% SoC, recharge 248.2 kW (ERCOT heavy preset)
     let mut c = distribute_command();
-    c["readiness_energy_wh"] = json!(7_073_700.0);
+    c["readiness_soc_percent"] = json!(91.8);
     c["recharge_power_w"] = json!(248_200.0);
     // Act + Assert
     assert_eq!(parse_error(measurement(), c), "parsed");

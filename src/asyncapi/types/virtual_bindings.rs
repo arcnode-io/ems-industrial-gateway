@@ -98,12 +98,13 @@ pub struct DistributeBinding {
     /// the site-wide operator reserve into each module's floor percent.
     #[serde(default)]
     pub site_capacity_wh: Option<f64>,
-    /// Stored energy the site keeps ready for its flex obligation (Wh),
-    /// derived from the DTM. Absent with `recharge_power_w`: no charging.
+    /// State of charge (percent, 0-100) the module recharges back to between
+    /// DER events, from the DTM's flex obligation. Absent with
+    /// `recharge_power_w`: no charging.
     #[serde(default)]
-    pub readiness_energy_wh: Option<f64>,
-    /// Most the site recharges toward readiness at (W). Absent with
-    /// `readiness_energy_wh`: no charging.
+    pub readiness_soc_percent: Option<f64>,
+    /// Most this module recharges toward readiness at (W), its share of the
+    /// site rate. Absent with `readiness_soc_percent`: no charging.
     #[serde(default)]
     pub recharge_power_w: Option<f64>,
 }

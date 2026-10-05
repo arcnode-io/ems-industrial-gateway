@@ -551,7 +551,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             poi_active_power_topic: d.poi_active_power_topic.clone(),
             operator_reserve_topic: d.operator_reserve_topic.clone(),
             site_capacity_wh: d.site_capacity_wh,
-            readiness_energy_wh: d.readiness_energy_wh,
+            readiness_soc_percent: d.readiness_soc_percent,
             recharge_power_w: d.recharge_power_w,
         }),
     }
