@@ -25,6 +25,7 @@ mod poi_gate_test;
 pub mod poi_servo;
 #[cfg(test)]
 mod poi_servo_test;
+pub mod recharge;
 pub mod shed;
 pub mod shed_task;
 pub mod task;

@@ -14,6 +14,7 @@ use crate::config::GatewayCredentials;
 use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
+use crate::envelope::recharge;
 use crate::envelope::writes::WriteState;
 use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
@@ -102,6 +103,13 @@ async fn tick_once(
 
     let target = match &cfg.guard {
         Some(guard) => {
+            let requested_setpoint = recharge::requested_w(
+                &cfg.binding,
+                &cfg.device_id,
+                requested_setpoint,
+                site_id,
+                cache,
+            );
             let active_power_topic = guard.active_power_topic.replace("{site_id}", site_id);
             let Some(active_power) = cache.get(&active_power_topic).and_then(|e| as_number(&e.0))
             else {
