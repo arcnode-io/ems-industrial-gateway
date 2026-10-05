@@ -11,6 +11,8 @@ pub mod bounds;
 pub mod config;
 pub mod control_law;
 #[cfg(test)]
+mod control_law_recovery_test;
+#[cfg(test)]
 mod control_law_servo_test;
 #[cfg(test)]
 mod control_law_step_test;

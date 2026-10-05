@@ -106,7 +106,18 @@ impl EnvelopeController {
         if self.mode == Mode::Constrained {
             let margin_export = self.config.hysteresis_margin * input.power_max;
             let margin_import = self.config.hysteresis_margin * input.power_min.abs();
-            if headroom_export >= margin_export && headroom_import >= margin_import {
+            // Reason: only the side the ramp moves toward needs margin. Less
+            // discharge (or more charge) pushes the POI toward import, more
+            // discharge toward export. Covering site load under zero export
+            // leaves no export margin, so demanding both held the battery
+            // discharging after the import limit lifted.
+            let target = input.requested_setpoint.clamp(floor, ceiling);
+            let clear = if target < self.current_output {
+                headroom_import >= margin_import
+            } else {
+                headroom_export >= margin_export
+            };
+            if clear {
                 self.dwell_elapsed += input.dt;
                 if self.dwell_elapsed >= self.config.hysteresis_dwell {
                     self.mode = Mode::Ramping;
