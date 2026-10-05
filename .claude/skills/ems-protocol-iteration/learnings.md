@@ -74,7 +74,7 @@ Append a new section after each protocol lands. Read top-to-bottom before starti
 - `testcontainers::core::ContainerPort::Udp(161)` to expose UDP. Default `with_exposed_port(161)` is TCP and fails later with "container does not expose port 161/tcp".
 - Looking up the mapped UDP port: `container.get_host_port_ipv4(ContainerPort::Udp(161))`. Plain `get_host_port_ipv4(161)` assumes TCP.
 - `SocketAddr::parse()` requires an IP literal, NOT a hostname. testcontainers reports a `Host` (often a hostname like `localhost`). Use `tokio::net::lookup_host((host, port))` to resolve. csnmp's `Snmp2cClient::new` wants a real `SocketAddr`.
-- Stale containers between CI runs: shared-network containers (postgres, hivemq, device-api) use FIXED names so device-api's beta cfg can resolve them by hostname. A killed prior run leaves them named on the daemon; the next run hits `Conflict: container name "/hivemq" already in use`. Fix: `before_script` in `.gitlab-ci.yml` runs `docker rm -f postgres hivemq device-api 2>/dev/null` + `docker network rm gateway-e2e`.
+- Never sweep containers in CI by name or image (`docker rm -f hivemq`, `--filter ancestor=…`): the runner's docker daemon is shared with the live demo, which runs the same images, and the sweep took the whole demo down twice. Give testcontainers generated names, hostname-only aliases (`with_hostname`) and OS-assigned host ports (`with_mapped_port(0, …)`), so a killed run's leftovers can't collide with the next run.
 
 **Dockerfile gotcha:** Same workspace-root stub trick from Modbus (`src/lib.rs` + stub other members). Updated mock-snmp-agent Dockerfile lists modbus + other peer dirs so `cargo build -p mock-snmp-agent` resolves the workspace cleanly.
 

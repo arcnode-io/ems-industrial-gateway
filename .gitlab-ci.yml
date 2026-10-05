@@ -6,25 +6,10 @@ stages:
 check:
   stage: check
   before_script:
-    # Clear stale containers + network from prior failed runs. testcontainers
-    # cleans up on Drop, but a killed process can leave behind named containers
-    # (postgres / hivemq / device-api are network-pinned for device-api beta cfg).
-    # Use `docker ps -a` not the default `docker ps` — failed testcontainer
-    # runs leave the container in `Created` state (not Running), which still
-    # reserves the port mapping. `Created` containers don't show up without -a.
-    - docker rm -f postgres emqx hivemq device-api 2>/dev/null || true
-    - docker ps -aq --filter "ancestor=hivemq/hivemq-ce" | xargs -r docker rm -f
-    - docker ps -aq --filter "ancestor=emqx/emqx" | xargs -r docker rm -f
-    # Mock containers ride on auto-generated docker names (silly_lamarr etc.)
-    # so we sweep them by image. Without this, a canceled pipeline leaves
-    # mock-* containers holding ports 502/161/8443/20000/47808 and the next
-    # run's testcontainers wait forever for the listening log.
-    - >-
-      for img in mock-modbus-server mock-snmp-agent mock-redfish-service
-      mock-dnp3-outstation mock-bacnet-device ems-device-api; do
-        docker ps -aq --filter "ancestor=public.ecr.aws/y1d2j6a8/$img" | xargs -r docker rm -f
-      done
-    - docker network rm gateway-e2e 2>/dev/null || true
+    # No container cleanup here: the runner's docker daemon is shared with the
+    # live demo, which runs the same images. Testcontainers get generated names
+    # and OS-assigned host ports, so a leftover from a killed run can't collide
+    # with this one.
     # Refresh ECR Public auth before the pre-pull. The runner is shared with
     # jobs that `docker login public.ecr.aws` to push; once that cached token
     # expires (12h), docker sends the stale token instead of falling back to
