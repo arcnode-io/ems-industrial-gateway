@@ -6,6 +6,13 @@
 //! The rack bindings expose no disconnect, so holding every module at 0 W is
 //! the strongest action available, and strictly safer than ignoring it.
 //!
+//! Releasing the hold snaps straight back to the target. That's only
+//! acceptable because the plant never leaves service. A real disconnect
+//! brings IEEE 1547-2018 enter-service obligations with it (a ramp, by
+//! default over 300 s in steps of at most 20% of rating, and 5 minutes of
+//! healthy voltage and frequency before reconnecting after a trip), so the
+//! disconnect and that ramp land in the same change or not at all.
+//!
 //! Only an explicit `false` acts. `energize_enabled` is absent on any site
 //! that has never received an energize control, so missing must mean
 //! permissive here, the inverse of every other gate.
