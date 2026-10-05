@@ -29,8 +29,12 @@ pub async fn write_setpoint(
         _ => (plain_client()?, "http"),
     };
     let url = format!("{}://{}:{}/redfish/v1{}", scheme, b.host, b.port, b.uri);
+    // Reason: DSP0266 §6.5 lets a service answer 428 to a PATCH without
+    // If-Match, and NVIDIA's DGX BMCs expect one. `*` matches whatever the
+    // resource currently is (RFC 7232), so it never trips a 412.
     let resp = client
         .patch(&url)
+        .header("If-Match", "*")
         .json(&nest(pointer, json!(value / b.scale)))
         .send()
         .await

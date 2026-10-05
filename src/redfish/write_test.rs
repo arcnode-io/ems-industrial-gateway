@@ -4,7 +4,7 @@
 use super::write_setpoint;
 use crate::asyncapi::types::RedfishBinding;
 use serde_json::json;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const GPU_1: &str = "/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1/EnvironmentMetrics";
@@ -49,4 +49,24 @@ async fn a_refused_setpoint_fails_with_the_bmcs_status() {
     // Assert
     let err = format!("{:#}", written.unwrap_err());
     assert!(err.contains("400"), "{err}");
+}
+
+#[tokio::test]
+async fn a_bmc_that_requires_if_match_accepts_the_write() {
+    // Arrange — DSP0266 §6.5: a service may answer 428 to a PATCH without
+    // If-Match; NVIDIA's DGX BMC examples always send `If-Match: *`
+    let bmc = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(header("If-Match", "*"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&bmc)
+        .await;
+    Mock::given(method("PATCH"))
+        .respond_with(ResponseTemplate::new(428))
+        .mount(&bmc)
+        .await;
+    // Act
+    let written = write_setpoint(&gpu_power_limit(bmc.address().port()), 700.0, None, None).await;
+    // Assert
+    assert!(written.is_ok(), "{written:?}");
 }
