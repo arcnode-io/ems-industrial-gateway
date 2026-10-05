@@ -98,6 +98,14 @@ pub struct DistributeBinding {
     /// the site-wide operator reserve into each module's floor percent.
     #[serde(default)]
     pub site_capacity_wh: Option<f64>,
+    /// Stored energy the site keeps ready for its flex obligation (Wh),
+    /// derived from the DTM. Absent with `recharge_power_w`: no charging.
+    #[serde(default)]
+    pub readiness_energy_wh: Option<f64>,
+    /// Most the site recharges toward readiness at (W). Absent with
+    /// `readiness_energy_wh`: no charging.
+    #[serde(default)]
+    pub recharge_power_w: Option<f64>,
 }
 
 /// One child's identity + static bounds for command distribution.

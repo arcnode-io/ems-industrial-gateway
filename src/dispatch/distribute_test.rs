@@ -108,6 +108,8 @@ fn compute_shares_splits_equally_across_two_standby_children() {
         poi_active_power_topic: None,
         operator_reserve_topic: None,
         site_capacity_wh: None,
+        readiness_energy_wh: None,
+        recharge_power_w: None,
     };
     // Act
     let mut shares = compute_shares(&binding, 200_000.0, "local_site", &cache).unwrap();
@@ -161,6 +163,8 @@ fn floored_pair(soc_1: f64, soc_2: f64) -> (DistributeBinding, InputCache) {
         poi_active_power_topic: None,
         operator_reserve_topic: None,
         site_capacity_wh: None,
+        readiness_energy_wh: None,
+        recharge_power_w: None,
     };
     (binding, cache)
 }

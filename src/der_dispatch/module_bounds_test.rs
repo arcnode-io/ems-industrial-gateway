@@ -29,6 +29,8 @@ fn distribute_binding(power_min: f64, power_max: f64) -> ProtocolBinding {
         poi_active_power_topic: None,
         operator_reserve_topic: None,
         site_capacity_wh: None,
+        readiness_energy_wh: None,
+        recharge_power_w: None,
     })
 }
 
