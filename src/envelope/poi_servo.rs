@@ -52,16 +52,26 @@ pub fn bounds(u: f64, p_poi: f64, import: Limit, export: Limit, dt: Duration) ->
     let headroom_import = headroom(-p_poi, import.now);
     let up = step(p_poi, export, headroom_export, headroom_import, dt);
     let down = step(-p_poi, import, headroom_import, headroom_export, dt);
-    let ceiling = u + up;
+    let export_jumped = jump(p_poi, export, headroom_export) > 0.0;
+    let import_jumped = jump(-p_poi, import, headroom_import) > 0.0;
+    let (mut ceiling, mut floor) = (u + up, u - down);
     // Reason: they only cross when a tightening jump on one side outruns the
-    // rate limit on the other; that rate limit isn't a real bound, so let
-    // the jump win, export side first (reverse power at the POI trips).
-    let floor = (u - down).min(ceiling);
+    // rate limit on the other. That rate limit isn't a real bound and the
+    // jump is exact, so the jump wins, export side first (reverse power at
+    // the POI trips).
+    if floor > ceiling {
+        if import_jumped && !export_jumped {
+            ceiling = floor;
+        } else {
+            floor = ceiling;
+        }
+    }
     Bounds {
         ceiling,
         floor,
         headroom_export,
         headroom_import,
+        jumped: export_jumped || import_jumped,
     }
 }
 
@@ -71,17 +81,23 @@ fn headroom(signed_poi: f64, limit: Option<f64>) -> f64 {
     limit.map_or(f64::INFINITY, |l| signed_poi + l)
 }
 
+/// Violation a tightening of `limit` created this tick, W (0 if none).
+///
+/// Reason: a tightening is our own, unlagged knowledge, so the extra
+/// violation it creates is taken off in one step. Only what the meter
+/// already showed goes through the gain.
+fn jump(signed_poi: f64, limit: Limit, headroom: f64) -> f64 {
+    let before = limit.prev.map_or(f64::INFINITY, |p| signed_poi + p);
+    (before.min(0.0) - headroom.min(0.0)).max(0.0)
+}
+
 /// How far output may move toward one limit this tick (negative = must back
 /// off). `opposite` is the other limit's headroom.
 fn step(signed_poi: f64, limit: Limit, headroom: f64, opposite: f64, dt: Duration) -> f64 {
     if limit.now.is_none() {
         return f64::INFINITY;
     }
-    // Reason: a tightening is our own, unlagged knowledge, so the extra
-    // violation it creates is taken off in one step. Only what the meter
-    // already showed goes through the gain.
-    let before = limit.prev.map_or(f64::INFINITY, |p| signed_poi + p);
-    let jump = (before.min(0.0) - headroom.min(0.0)).max(0.0);
+    let jump = jump(signed_poi, limit, headroom);
     let measured = headroom + jump;
     let rate = if measured >= 0.0 {
         APPROACH_GAIN_PER_SEC * measured

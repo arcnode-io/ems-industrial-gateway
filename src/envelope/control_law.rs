@@ -24,6 +24,10 @@ use crate::envelope::bounds;
 pub use crate::envelope::inputs::{EnvelopeConfig, EnvelopeTick};
 use std::time::Duration;
 
+/// Fresh POI readings skipped after a tightening jump: the longest meter lag
+/// the servo is tuned for (see `poi_servo`).
+const JUMP_HOLD_READINGS: u8 = 3;
+
 /// Which side of the envelope is currently binding, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -51,6 +55,8 @@ pub struct EnvelopeController {
     config: EnvelopeConfig,
     /// Last tick's limits, so the POI servo can tell a tightening from lag.
     prev_limits: (Option<f64>, Option<f64>),
+    /// Fresh POI readings still to skip after a tightening jump.
+    jump_hold: u8,
 }
 
 impl EnvelopeController {
@@ -64,6 +70,7 @@ impl EnvelopeController {
             current_output: initial_output,
             config,
             prev_limits: (None, None),
+            jump_hold: 0,
         }
     }
 
@@ -81,12 +88,24 @@ impl EnvelopeController {
         // A new request is only a new target: commands on a guarded module
         // aren't written to the device directly (see
         // `dispatch::dispatch_distribute`), so this is the only writer.
+        // Reason: the meter still shows the violation a jump already took
+        // off, for as long as it lags. Integrating it again overshoots, so
+        // readings that old only let limit changes move the bounds.
+        let mut held = input;
+        if self.jump_hold > 0 && input.poi_fresh {
+            self.jump_hold -= 1;
+            held.poi_fresh = false;
+        }
         let bounds::Bounds {
             ceiling,
             floor,
             headroom_export,
             headroom_import,
-        } = bounds::for_tick(self.current_output, self.prev_limits, &input);
+            jumped,
+        } = bounds::for_tick(self.current_output, self.prev_limits, &held);
+        if jumped {
+            self.jump_hold = JUMP_HOLD_READINGS;
+        }
         // Never past the module's own rating, whichever limit asks for it.
         let ceiling = ceiling.min(input.power_max);
         let floor = floor.max(input.power_min).min(ceiling);

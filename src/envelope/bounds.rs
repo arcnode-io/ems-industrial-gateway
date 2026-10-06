@@ -16,6 +16,8 @@ pub struct Bounds {
     pub headroom_export: f64,
     /// Import headroom (≤ 0 = violating import_limit).
     pub headroom_import: f64,
+    /// A limit tightened this tick and its jump moved a bound.
+    pub jumped: bool,
 }
 
 /// This tick's bounds for commanded output `u`. `prev_limits` is last
@@ -58,6 +60,7 @@ pub fn for_tick(u: f64, prev_limits: (Option<f64>, Option<f64>), t: &EnvelopeTic
                 floor,
                 headroom_export: ceiling - t.active_power,
                 headroom_import: t.active_power - floor,
+                jumped: false,
             }
         }
     }
