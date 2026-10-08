@@ -22,6 +22,8 @@ fn tick(poi_w: f64) -> ShedTick {
         requested_percent: 100.0,
         fleet_max_w: 100_000.0,
         fleet_min_w: 20_000.0,
+        // storage that can still answer, unless a test says otherwise
+        storage_spare_w: 1_000_000.0,
         dt: Duration::from_secs(1),
     }
 }
@@ -145,4 +147,36 @@ fn compute_stays_shed_while_the_limit_is_merely_met() {
     run(&mut c, tick(500_000.0), 60);
     // Act + Assert — no headroom, no release, however long it holds
     assert_eq!(run(&mut c, tick(0.0), 120), None);
+}
+
+#[test]
+fn with_no_spare_storage_compute_sheds_on_the_first_tick_over() {
+    // Arrange — every rack at its floor: nothing else is coming
+    let mut c = controller();
+    let blocked = ShedTick {
+        storage_spare_w: 0.0,
+        ..tick(5_000.0)
+    };
+    // Act + Assert — no dwell
+    let cut = c.tick(&blocked).expect("sheds at once");
+    assert!(cut < 100.0, "{cut}");
+}
+
+#[test]
+fn with_no_spare_storage_a_recharge_stopping_does_not_delay_the_shed() {
+    // Arrange — import falls as the battery stops charging, then holds: that
+    // is storage ceasing to add load, not storage closing the gap
+    let mut c = controller();
+    let blocked = |poi_w: f64| ShedTick {
+        storage_spare_w: 0.0,
+        ..tick(poi_w)
+    };
+    // Act
+    let first = c.tick(&blocked(30_000.0));
+    if let Some(p) = first {
+        c.confirm(p);
+    }
+    let second = c.tick(&blocked(5_000.0));
+    // Assert — both ticks cut
+    assert!(first.is_some() && second.is_some(), "{first:?} {second:?}");
 }

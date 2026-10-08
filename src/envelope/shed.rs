@@ -6,7 +6,8 @@
 //! Lever order is storage first, compute second: compute only sheds once
 //! import has stayed over the limit for the full hysteresis dwell. Invariant:
 //! that dwell must be longer than the BESS envelope servo takes to settle,
-//! so compute only ever covers what storage evidently couldn't.
+//! so compute only ever covers what storage evidently couldn't. Storage with
+//! no spare discharge can't answer at all, so then compute sheds at once.
 //!
 //! Both envelope bounds hold: exporting past the export limit means shedding
 //! overshot (storage plus shed load), so caps come back at once, no dwell.
@@ -46,6 +47,9 @@ pub struct ShedTick {
     pub fleet_max_w: f64,
     /// Sum of every child's min cap.
     pub fleet_min_w: f64,
+    /// Discharge storage on this POI could still add, W (see
+    /// `storage_spare`).
+    pub storage_spare_w: f64,
     /// Time since the last tick.
     pub dt: Duration,
 }
@@ -106,13 +110,20 @@ impl ShedController {
                 .last_over
                 .is_some_and(|prev| prev - over > SHRINK_DEADBAND * t.fleet_max_w);
             self.last_over = Some(over);
-            if storage_closing && self.over_for < self.config.hysteresis_dwell {
-                self.over_for = Duration::ZERO;
-                return None;
-            }
             self.over_for += t.dt;
-            if self.over_for < self.config.hysteresis_dwell {
-                return None;
+            // Reason: the dwell waits for storage to answer. Storage with no
+            // spare discharge can't, so waiting only prolongs the violation;
+            // a falling import is then storage ceasing to add load, not
+            // closing the gap.
+            let storage_spent = t.storage_spare_w < self.config.hysteresis_margin * t.fleet_max_w;
+            if !storage_spent {
+                if storage_closing && self.over_for < self.config.hysteresis_dwell {
+                    self.over_for = Duration::ZERO;
+                    return None;
+                }
+                if self.over_for < self.config.hysteresis_dwell {
+                    return None;
+                }
             }
             current - (over * watts_to_percent).min(step)
         } else if headroom > 0.0 && current < t.requested_percent {

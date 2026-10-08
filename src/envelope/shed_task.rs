@@ -3,11 +3,12 @@
 //! cap on change.
 
 use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::{PowerCapBinding, ProtocolBinding};
+use crate::asyncapi::types::{DistributeBinding, PowerCapBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::{LastRequestedSetpoints, power_cap};
 use crate::envelope::inputs::EnvelopeConfig;
 use crate::envelope::shed::{ShedController, ShedTick};
+use crate::envelope::storage_spare;
 use crate::inputs::substitute_site_id;
 use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
@@ -52,6 +53,11 @@ pub struct ShedTaskConfig {
     pub export_limit_topic: String,
     /// mTLS material for the BMC writes.
     pub creds: Option<GatewayCredentials>,
+    /// Every guarded battery's binding; those on this POI say whether
+    /// storage can still answer.
+    pub storage: Vec<DistributeBinding>,
+    /// Resolves `{site_id}` in the batteries' topics.
+    pub site_id: String,
 }
 
 impl ShedTaskConfig {
@@ -79,6 +85,8 @@ impl ShedTaskConfig {
             import_limit_topic: substitute_site_id(b.import_limit_topic.as_ref()?, site_id),
             export_limit_topic: substitute_site_id(b.export_limit_topic.as_ref()?, site_id),
             creds,
+            storage: Vec::new(),
+            site_id: site_id.to_string(),
         })
     }
 
@@ -116,7 +124,8 @@ pub fn spawn(
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    let Some(t) = inputs(&cfg, &cache, &mut last_poi) else {
+                    let spare = storage_spare::spare_w(&cfg.storage, &cfg.poi_topic, &cfg.site_id, &cache);
+                    let Some(t) = inputs(&cfg, &cache, spare, &mut last_poi) else {
                         continue; // hold — an input missing or the POI reading not new
                     };
                     let Some(percent) = controller.tick(&t) else { continue };
@@ -138,6 +147,7 @@ pub fn spawn(
 fn inputs(
     cfg: &ShedTaskConfig,
     cache: &InputCache,
+    storage_spare_w: f64,
     last_poi: &mut Option<Instant>,
 ) -> Option<ShedTick> {
     let number = |topic: &str| cache.get(topic).and_then(|e| Some((as_number(&e.0)?, e.1)));
@@ -160,6 +170,7 @@ fn inputs(
         requested_percent: 100.0,
         fleet_max_w: children().map(|c| c.max_w).sum(),
         fleet_min_w: children().map(|c| c.min_w).sum(),
+        storage_spare_w,
         dt,
     })
 }
