@@ -26,6 +26,7 @@ pub mod allocation;
 #[cfg(test)]
 mod allocation_test;
 mod distribute;
+mod operating_state;
 pub(crate) mod power_cap;
 pub(crate) mod rack_limits;
 mod reserve;

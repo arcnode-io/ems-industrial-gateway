@@ -56,6 +56,16 @@ async fn publish(op: &AsyncClient, device: &str, measurement: &str, value: f64) 
     Ok(())
 }
 
+/// The racks report, as the gateway's 1 Hz poller would; a rack quiet for
+/// more than 5 s is treated as offline.
+async fn racks_report(op: &AsyncClient) -> Result<()> {
+    for rack in RACKS {
+        publish(op, rack, "operating_state/none", 0.0).await?;
+        publish(op, rack, "state_of_charge/percent", 50.0).await?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_reserve_above_the_stored_energy_keeps_the_battery_out() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
@@ -116,10 +126,7 @@ async fn a_reserve_above_the_stored_energy_keeps_the_battery_out() -> Result<()>
     )?;
     op.connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
         .await?;
-    for rack in RACKS {
-        publish(&op, rack, "operating_state/none", 0.0).await?;
-        publish(&op, rack, "state_of_charge/percent", 50.0).await?;
-    }
+    racks_report(&op).await?;
     publish(&op, "operating_envelope", "import_limit/watts", 0.0).await?;
     publish(&op, "operating_envelope", "export_limit/watts", 0.0).await?;
     publish(&op, MODULE_ID, "active_power/watts", 0.0).await?;
@@ -137,6 +144,7 @@ async fn a_reserve_above_the_stored_energy_keeps_the_battery_out() -> Result<()>
     // imports 300 kW
     op.publish(reserve(6_000_000.0)).await?;
     for _ in 0..12 {
+        racks_report(&op).await?;
         publish(&op, METER_ID, "active_power/watts", 300_000.0).await?;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -154,6 +162,7 @@ async fn a_reserve_above_the_stored_energy_keeps_the_battery_out() -> Result<()>
     op.publish(reserve(0.0)).await?;
     let discharging = timeout(Duration::from_secs(15), async {
         loop {
+            racks_report(&op).await?;
             publish(&op, METER_ID, "active_power/watts", 300_000.0).await?;
             if rack_watts(port1).await? > 0 && rack_watts(port2).await? > 0 {
                 return anyhow::Ok(());

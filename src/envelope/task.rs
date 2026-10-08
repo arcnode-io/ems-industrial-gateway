@@ -8,11 +8,12 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
+use crate::dispatch::rack_limits::STALE_AFTER;
 use crate::dispatch::{self, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
 use crate::envelope::writes::WriteState;
-use crate::envelope::{energize, recharge};
+use crate::envelope::{energize, recharge, stale};
 use crate::synthetic::{InputCache, as_number};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -116,16 +117,13 @@ async fn tick_once(
             // back to the battery-only law would ignore site load and let
             // charging push POI import past its limit.
             let poi_active_power = match &guard.poi_active_power_topic {
-                Some(topic) => {
-                    let topic = topic.replace("{site_id}", site_id);
-                    let Some((p_poi, received_at)) = cache
-                        .get(&topic)
-                        .and_then(|e| Some((as_number(&e.0)?, e.1)))
-                    else {
-                        return; // hold — no POI reading cached yet
-                    };
-                    Some((p_poi, received_at))
-                }
+                Some(topic) => match cache
+                    .get(&topic.replace("{site_id}", site_id))
+                    .and_then(|e| Some((as_number(&e.0)?, e.1)))
+                {
+                    Some(reading) => Some(reading),
+                    None => return, // hold — no POI reading cached yet
+                },
                 None => None,
             };
             let import_limit_topic = guard.import_limit_topic.replace("{site_id}", site_id);
@@ -141,22 +139,26 @@ async fn tick_once(
             // seeded it from whatever was cached first, often a stale 0.
             let ctrl = controller
                 .get_or_insert_with(|| EnvelopeController::new(guard.control, active_power));
-            // The clamped/ramped value either way — `tick`'s Some/None only
-            // says whether it *changed* this tick, but the rebalance below
-            // needs the current target regardless.
-            ctrl.tick(EnvelopeTick {
-                import_limit,
-                export_limit,
-                active_power,
-                requested_setpoint,
-                poi_active_power: poi_active_power.map(|(p, _)| p),
-                poi_fresh,
-                hold_approach,
-                power_min: guard.power_min,
-                power_max: guard.power_max,
-                dt,
-            });
-            ctrl.current_output()
+            if poi_active_power.is_some_and(|(_, at)| at.elapsed() > STALE_AFTER) {
+                stale::ramp_to_zero(ctrl, guard, dt)
+            } else {
+                // The clamped/ramped value either way — `tick`'s Some/None only
+                // says whether it *changed* this tick, but the rebalance below
+                // needs the current target regardless.
+                ctrl.tick(EnvelopeTick {
+                    import_limit,
+                    export_limit,
+                    active_power,
+                    requested_setpoint,
+                    poi_active_power: poi_active_power.map(|(p, _)| p),
+                    poi_fresh,
+                    hold_approach,
+                    power_min: guard.power_min,
+                    power_max: guard.power_max,
+                    dt,
+                });
+                ctrl.current_output()
+            }
         }
         None => requested_setpoint,
     };

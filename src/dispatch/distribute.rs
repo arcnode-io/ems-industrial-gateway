@@ -5,12 +5,13 @@ use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{DistributeBinding, ProtocolBinding};
 use crate::config::GatewayCredentials;
 use crate::dispatch::allocation::{self, AllocationPolicy, ChildCapacity, OperatingState};
-use crate::dispatch::{rack_limits, reserve};
+use crate::dispatch::operating_state::operating_state;
+use crate::dispatch::rack_limits::{self, STALE_AFTER};
+use crate::dispatch::reserve;
 use crate::envelope;
 use crate::modbus::client as modbus;
 use crate::synthetic::{InputCache, as_number};
 use anyhow::{Context, Result, anyhow};
-use serde_json::Value;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -42,13 +43,17 @@ pub async fn dispatch_distribute(
         return Ok(());
     }
     let shares = compute_shares(binding, target, site_id, cache)?;
-    write_shares(&shares, channel_key, device_channels, device_trust, creds).await
+    write_shares(&shares, channel_key, device_channels, device_trust, creds).await?;
+    if target != 0.0 && shares.iter().all(|(_, w)| *w == 0.0) {
+        return Err(anyhow!("no rack could take {target} W; all held at 0 W"));
+    }
+    Ok(())
 }
 
 /// Read each child's cached `operating_state`/`state_of_charge` and allocate
-/// `target` across eligible children (max-min fair share). Pure aside from
-/// the cache reads — no I/O, no writes. Errors if resolving any child's cache
-/// entry fails, or no child ends up eligible.
+/// `target` across eligible children (max-min fair share); every other child
+/// gets 0 W. Pure aside from the cache reads: no I/O, no writes. Errors if a
+/// child has never reported.
 pub fn compute_shares(
     binding: &DistributeBinding,
     target: f64,
@@ -63,9 +68,13 @@ pub fn compute_shares(
         .map(|c| resolve_child(c, target, site_id, cache))
         .map(|child| child.map(|c| apply_reserve_floor(floor, c, target)))
         .collect::<Result<_>>()?;
-    let shares = allocation::allocate(target, &children, policy);
-    if shares.is_empty() {
-        return Err(anyhow!("no eligible children to distribute to"));
+    let mut shares = allocation::allocate(target, &children, policy);
+    // Reason: a child left out of the split keeps its last setpoint, unseen.
+    // Every child it can't use is told 0 W.
+    for c in &children {
+        if shares.iter().all(|(id, _)| *id != c.device_id) {
+            shares.push((c.device_id.clone(), 0.0));
+        }
     }
     Ok(shares)
 }
@@ -115,14 +124,22 @@ fn resolve_child(
 ) -> Result<ChildCapacity> {
     let operating_state_topic = c.operating_state_topic.replace("{site_id}", site_id);
     let state_of_charge_topic = c.state_of_charge_topic.replace("{site_id}", site_id);
-    let operating_state = cache
+    let state_entry = cache
         .get(&operating_state_topic)
-        .map(|e| operating_state(&e.0))
-        .ok_or_else(|| anyhow!("no cached operating_state for {}", c.device_id))??;
-    let state_of_charge = cache
+        .ok_or_else(|| anyhow!("no cached operating_state for {}", c.device_id))?;
+    let soc_entry = cache
         .get(&state_of_charge_topic)
-        .and_then(|e| as_number(&e.0))
         .ok_or_else(|| anyhow!("no cached state_of_charge for {}", c.device_id))?;
+    let state_of_charge =
+        as_number(&soc_entry.0).ok_or_else(|| anyhow!("state_of_charge for {}", c.device_id))?;
+    // Reason: a rack that has stopped reporting can't be steered blind, so
+    // it's treated as offline (0 W) until it reports again.
+    let quiet = state_entry.1.elapsed() > STALE_AFTER || soc_entry.1.elapsed() > STALE_AFTER;
+    let operating_state = if quiet {
+        OperatingState::Offline
+    } else {
+        operating_state(&state_entry.0)?
+    };
     Ok(ChildCapacity {
         device_id: c.device_id.clone(),
         operating_state,
@@ -150,37 +167,10 @@ fn apply_reserve_floor(floor: Option<f64>, child: ChildCapacity, target: f64) ->
     }
 }
 
-/// A cached `operating_state` as its enum: our label (`"FAULT"`) as typed
-/// publishing sends it, or the register code a number-only publish sends.
-fn operating_state(value: &Value) -> Result<OperatingState> {
-    match value.as_str() {
-        Some("STANDBY") => Ok(OperatingState::Standby),
-        Some("CHARGING") => Ok(OperatingState::Charging),
-        Some("DISCHARGING") => Ok(OperatingState::Discharging),
-        Some("FAULT") => Ok(OperatingState::Fault),
-        Some("OFFLINE") => Ok(OperatingState::Offline),
-        Some(other) => Err(anyhow!("unknown operating_state label: {other}")),
-        None => operating_state_from_f64(
-            as_number(value).ok_or_else(|| anyhow!("operating_state is {value}"))?,
-        ),
-    }
-}
-
-/// Map a cached `operating_state` reading back to its enum. Register-value
-/// convention per `bess_rack.yaml`: 0=STANDBY, 1=CHARGING, 2=DISCHARGING,
-/// 3=FAULT, 4=OFFLINE.
-fn operating_state_from_f64(raw: f64) -> Result<OperatingState> {
-    #[allow(clippy::cast_possible_truncation)]
-    match raw.round() as i64 {
-        0 => Ok(OperatingState::Standby),
-        1 => Ok(OperatingState::Charging),
-        2 => Ok(OperatingState::Discharging),
-        3 => Ok(OperatingState::Fault),
-        4 => Ok(OperatingState::Offline),
-        other => Err(anyhow!("unknown operating_state value: {other}")),
-    }
-}
-
 #[cfg(test)]
 #[path = "distribute_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "distribute_stale_test.rs"]
+mod stale_tests;

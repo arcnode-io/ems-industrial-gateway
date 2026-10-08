@@ -49,14 +49,17 @@ async fn watts(port: u16) -> Result<i32> {
     ))
 }
 
-/// Poll both racks until they hold `expected`, or fail after 15 s.
-async fn wait_for(ports: [u16; 2], expected: [i32; 2], what: &str) -> Result<()> {
+/// Poll both racks until they hold `expected`, or fail after 15 s. The racks
+/// report meanwhile, as the gateway's 1 Hz poller would (a rack quiet for
+/// more than 5 s is treated as offline).
+async fn wait_for(op: &AsyncClient, ports: [u16; 2], expected: [i32; 2], what: &str) -> Result<()> {
     timeout(Duration::from_secs(15), async {
         // A read error means a rack's setpoint register isn't written yet
         // (the mock serves it only after the first write): keep waiting.
         while [watts(ports[0]).await.ok(), watts(ports[1]).await.ok()]
             != [Some(expected[0]), Some(expected[1])]
         {
+            racks_report(op).await?;
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         anyhow::Ok(())
@@ -72,6 +75,17 @@ async fn publish(op: &AsyncClient, topic: &str, payload: &str, qos: i32) -> Resu
         qos,
     ))
     .await?;
+    Ok(())
+}
+
+/// Both racks report standby at 50% SoC.
+async fn racks_report(op: &AsyncClient) -> Result<()> {
+    for rack in RACKS {
+        let state = format!("{rack}/measurements/operating_state/none");
+        publish(op, &state, r#"{"ts":"t","value":0}"#, 0).await?;
+        let soc = format!("{rack}/measurements/state_of_charge/percent");
+        publish(op, &soc, r#"{"ts":"t","value":50}"#, 0).await?;
+    }
     Ok(())
 }
 
@@ -125,22 +139,7 @@ async fn ending_an_event_restores_each_modules_pre_event_setpoint() -> Result<()
     )?;
     op.connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
         .await?;
-    for rack in RACKS {
-        publish(
-            &op,
-            &format!("{rack}/measurements/operating_state/none"),
-            r#"{"ts":"t","value":0}"#,
-            0,
-        )
-        .await?;
-        publish(
-            &op,
-            &format!("{rack}/measurements/state_of_charge/percent"),
-            r#"{"ts":"t","value":50}"#,
-            0,
-        )
-        .await?;
-    }
+    racks_report(&op).await?;
     publish(
         &op,
         "module_1/measurements/state_of_charge/percent",
@@ -171,7 +170,7 @@ async fn ending_an_event_restores_each_modules_pre_event_setpoint() -> Result<()
         1,
     )
     .await?;
-    wait_for(ports, [-100_000, 0], "operator's pre-event setpoint").await?;
+    wait_for(&op, ports, [-100_000, 0], "operator's pre-event setpoint").await?;
 
     // Act 1 — a 400 kW curtailment: soc_weighted 70/30 across the modules.
     publish(
@@ -195,7 +194,7 @@ async fn ending_an_event_restores_each_modules_pre_event_setpoint() -> Result<()
         0,
     )
     .await?;
-    wait_for(ports, [280_000, 120_000], "event dispatch").await?;
+    wait_for(&op, ports, [280_000, 120_000], "event dispatch").await?;
 
     // Act 2 — the event ends. The retained target stays at 400 kW, as it
     // does in production, so only event_active tells the gateway to let go.
@@ -208,7 +207,7 @@ async fn ending_an_event_restores_each_modules_pre_event_setpoint() -> Result<()
     .await?;
 
     // Assert — module_1 back to charging, module_2 (no pre-event setpoint) to 0.
-    wait_for(ports, [-100_000, 0], "release after the event ended").await?;
+    wait_for(&op, ports, [-100_000, 0], "release after the event ended").await?;
 
     cancel.cancel();
     gateway.await??;

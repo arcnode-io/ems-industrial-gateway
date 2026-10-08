@@ -63,6 +63,16 @@ async fn publish(op: &AsyncClient, device: &str, measurement: &str, value: f64) 
     Ok(())
 }
 
+/// The racks report, as the gateway's 1 Hz poller would; a rack quiet for
+/// more than 5 s is treated as offline.
+async fn racks_report(op: &AsyncClient) -> Result<()> {
+    for rack in RACKS {
+        publish(op, rack, "operating_state/none", 0.0).await?;
+        publish(op, rack, "state_of_charge/percent", 50.0).await?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_lagging_meter_does_not_ring_the_envelope_into_export() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
@@ -123,10 +133,7 @@ async fn a_lagging_meter_does_not_ring_the_envelope_into_export() -> Result<()> 
     )?;
     op.connect(ConnectOptionsBuilder::new().clean_session(true).finalize())
         .await?;
-    for rack in RACKS {
-        publish(&op, rack, "operating_state/none", 0.0).await?;
-        publish(&op, rack, "state_of_charge/percent", 50.0).await?;
-    }
+    racks_report(&op).await?;
     publish(&op, "operating_envelope", "import_limit/watts", 0.0).await?;
     publish(&op, "operating_envelope", "export_limit/watts", 0.0).await?;
     // Seed the loop so the envelope has a POI reading to start from; the
@@ -136,10 +143,12 @@ async fn a_lagging_meter_does_not_ring_the_envelope_into_export() -> Result<()> 
     publish(&op, METER_ID, "active_power/watts", LOAD_W).await?;
     timeout(Duration::from_secs(30), async {
         while racks_total(ports).await.is_err() {
+            racks_report(&op).await?;
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        anyhow::Ok(())
     })
-    .await?;
+    .await??;
 
     // Act — close the loop: module reading is fresh, meter reading is 2 s old
     // Reason: lag by wall time, not sample count; each rack read opens a
@@ -156,6 +165,7 @@ async fn a_lagging_meter_does_not_ring_the_envelope_into_export() -> Result<()> 
         while meter.front().is_some_and(|(t, _)| t.elapsed() >= METER_LAG) {
             reported = meter.pop_front().unwrap().1;
         }
+        racks_report(&op).await?;
         publish(&op, MODULE_ID, "active_power/watts", battery).await?;
         publish(&op, METER_ID, "active_power/watts", reported).await?;
         tokio::time::sleep(Duration::from_millis(500)).await;

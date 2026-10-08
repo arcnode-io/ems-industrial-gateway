@@ -31,6 +31,7 @@ mod poi_servo_test;
 pub mod recharge;
 pub mod shed;
 pub mod shed_task;
+pub mod stale;
 pub mod storage_spare;
 pub mod task;
 pub mod writes;
