@@ -1,16 +1,17 @@
 //! One async task per synthetic channel: tick → read cached inputs → apply
 //! operation → publish FloatSample.
 //!
-//! Hold semantic (handoff Q5b): does NOT publish until every declared input
-//! topic has at least one cached sample. Consumers watching the output topic
+//! Hold semantic (handoff Q5b): does NOT publish unless every declared input
+//! topic has a cached sample, younger than its stale limit if it has one. Consumers watching the output topic
 //! see no traffic during cold start / outage; quality is recoverable from
 //! the input channels' own status measurements per ADR §5.
 
-use crate::synthetic::cache::{InputCache, as_number};
+use crate::synthetic::cache::{CacheEntry, InputCache, as_number};
 use crate::synthetic::operation::{self, Operation};
 use anyhow::Result;
 use chrono::Utc;
 use paho_mqtt::{AsyncClient, Message};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +47,9 @@ pub struct SyntheticTaskConfig {
     pub computation: Computation,
     /// Tick cadence in Hz; derived from the measurement's poll_rate_hz.
     pub tick_hz: f64,
+    /// Input topic → age that holds the publish (see `stale::stale_limits`);
+    /// an input not listed never goes stale.
+    pub stale_limits: HashMap<String, Duration>,
 }
 
 /// Spawn the per-channel synthetic loop. The returned `JoinHandle` exits when
@@ -78,7 +82,7 @@ pub fn spawn(
     })
 }
 
-/// One tick: gather cached input values; if any input is missing, hold (no
+/// One tick: gather cached input values; if any input is missing or stale, hold (no
 /// publish); otherwise evaluate + publish.
 async fn tick_once(
     cfg: &SyntheticTaskConfig,
@@ -90,7 +94,7 @@ async fn tick_once(
             operation,
             input_topics,
         } => {
-            let Some(values) = gather_inputs(input_topics, cache) else {
+            let Some(values) = gather_inputs(input_topics, cache, &cfg.stale_limits) else {
                 debug!(
                     topic = %cfg.output_topic,
                     "synthetic hold: not all inputs cached yet",
@@ -100,7 +104,7 @@ async fn tick_once(
             operation.apply(&values)?
         }
         Computation::WeightedMean { pairs } => {
-            let Some(resolved) = gather_pairs(pairs, cache) else {
+            let Some(resolved) = gather_pairs(pairs, cache, &cfg.stale_limits) else {
                 debug!(
                     topic = %cfg.output_topic,
                     "synthetic hold: not all pairs cached yet",
@@ -120,26 +124,47 @@ async fn tick_once(
     Ok(())
 }
 
-/// Return Some(values) if EVERY input topic has a cached entry; None if any
+/// Return Some(values) if EVERY input topic has a fresh cached entry; None if any
 /// input is missing (hold semantic per Q5b).
-fn gather_inputs(input_topics: &[String], cache: &InputCache) -> Option<Vec<f64>> {
+fn gather_inputs(
+    input_topics: &[String],
+    cache: &InputCache,
+    stale_limits: &HashMap<String, Duration>,
+) -> Option<Vec<f64>> {
     let mut values = Vec::with_capacity(input_topics.len());
     for topic in input_topics {
-        let entry = cache.get(topic)?;
+        let entry = fresh(cache, topic, stale_limits)?;
         values.push(as_number(&entry.0)?);
     }
     Some(values)
 }
 
-/// Return Some((value, weight)) pairs if EVERY pair's topic has a cached
+/// Return Some((value, weight)) pairs if EVERY pair's topic has a fresh cached
 /// entry; None if any is missing (same hold semantic as `gather_inputs`).
-fn gather_pairs(pairs: &[(String, f64)], cache: &InputCache) -> Option<Vec<(f64, f64)>> {
+fn gather_pairs(
+    pairs: &[(String, f64)],
+    cache: &InputCache,
+    stale_limits: &HashMap<String, Duration>,
+) -> Option<Vec<(f64, f64)>> {
     let mut resolved = Vec::with_capacity(pairs.len());
     for (topic, weight) in pairs {
-        let entry = cache.get(topic)?;
+        let entry = fresh(cache, topic, stale_limits)?;
         resolved.push((as_number(&entry.0)?, *weight));
     }
     Some(resolved)
+}
+
+/// `topic`'s cached entry, unless it's older than its stale limit.
+fn fresh<'a>(
+    cache: &'a InputCache,
+    topic: &str,
+    stale_limits: &HashMap<String, Duration>,
+) -> Option<dashmap::mapref::one::Ref<'a, String, CacheEntry>> {
+    let entry = cache.get(topic)?;
+    let dead = stale_limits
+        .get(topic)
+        .is_some_and(|l| entry.1.elapsed() > *l);
+    (!dead).then_some(entry)
 }
 
 /// Convert poll_rate_hz to a tick period in milliseconds; min 1ms so the
@@ -153,61 +178,5 @@ fn hz_to_period_ms(hz: f64) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::synthetic::cache::new_input_cache;
-    use std::time::Instant;
-
-    #[test]
-    fn gather_inputs_holds_when_any_input_missing() {
-        // Arrange — one of two topics not yet cached
-        let cache = new_input_cache();
-        cache.insert("a".into(), (serde_json::json!(10.0), Instant::now()));
-        // Act
-        let result = gather_inputs(&["a".into(), "b".into()], &cache);
-        // Assert
-        assert!(result.is_none(), "hold when any input missing");
-    }
-
-    #[test]
-    fn gather_inputs_returns_values_when_all_cached() {
-        // Arrange — both inputs cached
-        let cache = new_input_cache();
-        cache.insert("a".into(), (serde_json::json!(10.0), Instant::now()));
-        cache.insert("b".into(), (serde_json::json!(3.0), Instant::now()));
-        // Act
-        let values = gather_inputs(&["a".into(), "b".into()], &cache).unwrap();
-        // Assert
-        assert_eq!(values, vec![10.0, 3.0]);
-    }
-
-    #[test]
-    fn gather_pairs_holds_when_any_pair_missing() {
-        // Arrange — one of two topics not yet cached
-        let cache = new_input_cache();
-        cache.insert("a".into(), (serde_json::json!(50.0), Instant::now()));
-        // Act
-        let result = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache);
-        // Assert
-        assert!(result.is_none(), "hold when any pair missing");
-    }
-
-    #[test]
-    fn gather_pairs_returns_value_weight_pairs_when_all_cached() {
-        // Arrange
-        let cache = new_input_cache();
-        cache.insert("a".into(), (serde_json::json!(50.0), Instant::now()));
-        cache.insert("b".into(), (serde_json::json!(80.0), Instant::now()));
-        // Act
-        let pairs = gather_pairs(&[("a".into(), 2.0), ("b".into(), 1.0)], &cache).unwrap();
-        // Assert — weight carried through unchanged, value from the cache
-        assert_eq!(pairs, vec![(50.0, 2.0), (80.0, 1.0)]);
-    }
-
-    #[test]
-    fn hz_to_period_clamps_to_minimum_1ms() {
-        assert_eq!(hz_to_period_ms(2000.0), 1);
-        assert_eq!(hz_to_period_ms(1.0), 1000);
-        assert_eq!(hz_to_period_ms(0.0033), 303_030);
-    }
-}
+#[path = "task_test.rs"]
+mod tests;

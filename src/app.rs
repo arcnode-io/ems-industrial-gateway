@@ -33,11 +33,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 /// Minimum allowed poll rate (slowest). Below this, tasks are effectively dead.
-const MIN_POLL_HZ: f64 = 0.01;
+pub(crate) const MIN_POLL_HZ: f64 = 0.01;
 /// Maximum allowed poll rate (fastest). Above this risks melting the device.
-const MAX_POLL_HZ: f64 = 10.0;
+pub(crate) const MAX_POLL_HZ: f64 = 10.0;
 /// Default poll rate when the spec author omits `poll_rate_hz`.
-const DEFAULT_POLL_HZ: f64 = 1.0;
+pub(crate) const DEFAULT_POLL_HZ: f64 = 1.0;
 
 /// Tier 2 flow. Returns when `cancel` fires (SIGINT/SIGTERM in prod, test
 /// driver in tests). Errors propagate from initial setup; per-task read
@@ -224,6 +224,7 @@ fn spawn_task_set(
             let poll_rate = clamp_poll_rate(source.poll_rate_hz, &topic);
             if let ProtocolBinding::Synthetic(b) = &source.binding {
                 if let Some(handle) = spawn_synthetic(
+                    spec,
                     b,
                     &topic,
                     poll_rate,
@@ -423,6 +424,7 @@ fn spawn_task_set(
 /// keeps running for valid channels).
 #[allow(clippy::too_many_arguments)]
 fn spawn_synthetic(
+    spec: &AsyncApiSpec,
     binding: &SyntheticBinding,
     output_topic: &str,
     tick_hz: f64,
@@ -456,10 +458,15 @@ fn spawn_synthetic(
             input_topics,
         }
     };
+    let inputs = match &computation {
+        Computation::Operation { input_topics, .. } => input_topics.clone(),
+        Computation::WeightedMean { pairs } => pairs.iter().map(|(t, _)| t.clone()).collect(),
+    };
     let cfg = SyntheticTaskConfig {
         output_topic: output_topic.to_string(),
         computation,
         tick_hz,
+        stale_limits: synthetic::stale::stale_limits(spec, &inputs),
     };
     Some(synthetic::task::spawn(cfg, cache, mqtt, cancel))
 }

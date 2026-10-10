@@ -14,6 +14,7 @@
 
 pub mod cache;
 pub mod operation;
+pub mod stale;
 pub mod task;
 
 pub use cache::{InputCache, as_number, new_input_cache};
