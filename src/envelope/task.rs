@@ -5,20 +5,16 @@
 //! writes bypass `handle_command`'s last-requested capture, so they never
 //! look like a new operator request.
 
-use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::dispatch::rack_limits::STALE_AFTER;
-use crate::dispatch::{self, LastRequestedSetpoints};
+use crate::dispatch::{self, Devices, LastRequestedSetpoints};
 use crate::envelope::config::EnvelopeTaskConfig;
 use crate::envelope::control_law::{EnvelopeController, EnvelopeTick};
 use crate::envelope::writes::WriteState;
 use crate::envelope::{energize, recharge, stale};
 use crate::synthetic::{InputCache, as_number};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -31,8 +27,7 @@ pub fn spawn(
     site_id: String,
     cache: InputCache,
     last_requested: LastRequestedSetpoints,
-    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    devices: Devices,
     creds: Option<GatewayCredentials>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -61,8 +56,7 @@ pub fn spawn(
                         &site_id,
                         &cache,
                         &last_requested,
-                        &device_channels,
-                        &device_trust,
+                        &devices,
                         creds.as_ref(),
                     )
                     .await;
@@ -87,8 +81,7 @@ async fn tick_once(
     site_id: &str,
     cache: &InputCache,
     last_requested: &LastRequestedSetpoints,
-    device_channels: &Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    device_trust: &Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    devices: &Devices,
     creds: Option<&GatewayCredentials>,
 ) {
     let requested_setpoint = last_requested
@@ -168,7 +161,8 @@ async fn tick_once(
         warn!(device_id = %cfg.device_id, "rebalance task's binding is not distribute; nothing to do");
         return;
     };
-    let shares = match dispatch::compute_shares(d, target, site_id, cache) {
+    let locked = devices.locked.read().await.clone();
+    let shares = match dispatch::compute_shares(d, target, site_id, cache, &locked) {
         Ok(s) => s,
         Err(_) => return, // hold — same posture as missing cache inputs above
     };
@@ -184,8 +178,8 @@ async fn tick_once(
         return;
     };
 
-    let channels = device_channels.read().await;
-    let trust = device_trust.read().await;
+    let channels = devices.channels.read().await;
+    let trust = devices.trust.read().await;
     match dispatch::write_shares(&plan.writes, &cfg.channel_key, &channels, &trust, creds).await {
         Ok(()) => writes.landed(plan),
         Err(err) => {

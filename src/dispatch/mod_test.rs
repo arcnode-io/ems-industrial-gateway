@@ -65,6 +65,7 @@ async fn a_redfish_setpoint_is_written_to_the_bmc() {
         "s",
         &HashMap::new(),
         &HashMap::new(),
+        &Default::default(),
         None,
         &new_input_cache(),
     )

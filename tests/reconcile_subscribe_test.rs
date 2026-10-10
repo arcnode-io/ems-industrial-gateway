@@ -43,6 +43,13 @@ async fn serve(server: &MockServer, body: Value) {
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/loto"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "locks": [], "locked_devices": [] })),
+        )
+        .mount(server)
+        .await;
 }
 
 /// Keep publishing `input` until `total` comes back, or give up.

@@ -25,8 +25,9 @@
 use crate::config::GatewayCredentials;
 use crate::der_dispatch::SharedEventMemory;
 use crate::der_dispatch::module_bounds::modules_with_bounds;
-use crate::der_dispatch::module_command::{Devices, dispatch_one};
+use crate::der_dispatch::module_command::dispatch_one;
 use crate::der_dispatch::posture::{Posture, PostureTopics, posture};
+use crate::dispatch::Devices;
 use crate::dispatch::LastRequestedSetpoints;
 use crate::dispatch::allocation::{self, AllocationPolicy};
 use crate::synthetic::InputCache;
@@ -143,10 +144,11 @@ async fn tick_once(
     memory.lock().unwrap().begin(|| operator);
 
     let channels = devices.channels.read().await;
-    let Some(modules) = modules_with_bounds(&channels, cache, &cfg.site_id, target) else {
+    let locked = devices.locked.read().await;
+    let Some(modules) = modules_with_bounds(&channels, cache, &cfg.site_id, target, &locked) else {
         return; // hold — no modules known, or any module's state not yet cached
     };
-    drop(channels);
+    drop((channels, locked));
     if modules.is_empty() {
         return;
     }

@@ -2,28 +2,18 @@
 //! ticks the shed controller on each fresh POI reading and writes the fleet
 //! cap on change.
 
-use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::{DistributeBinding, PowerCapBinding, ProtocolBinding};
+use crate::asyncapi::types::{DistributeBinding, PowerCapBinding};
 use crate::config::GatewayCredentials;
-use crate::dispatch::{LastRequestedSetpoints, power_cap};
+use crate::dispatch::{Devices, LastRequestedSetpoints, power_cap};
 use crate::envelope::inputs::EnvelopeConfig;
 use crate::envelope::shed::{ShedController, ShedTick};
 use crate::envelope::storage_spare;
 use crate::inputs::substitute_site_id;
 use crate::synthetic::{InputCache, as_number};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-
-/// Live device maps a cap write resolves each child's binding from.
-pub type Devices = (
-    Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    Arc<RwLock<HashMap<String, DeviceTrust>>>,
-);
 
 /// One compute module's guarded power cap.
 pub struct CapModule {
@@ -124,15 +114,16 @@ pub fn spawn(
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    let spare = storage_spare::spare_w(&cfg.storage, &cfg.poi_topic, &cfg.site_id, &cache);
+                    let locked = devices.locked.read().await.clone();
+                    let spare = storage_spare::spare_w(&cfg.storage, &cfg.poi_topic, &cfg.site_id, &cache, &locked);
                     let Some(t) = inputs(&cfg, &cache, spare, &mut last_poi) else {
                         continue; // hold — an input missing or the POI reading not new
                     };
                     let Some(percent) = controller.tick(&t) else { continue };
                     info!(poi = %cfg.poi_topic, percent, modules = cfg.modules.len(), "compute shed: fleet cap");
                     let caps = module_caps(&cfg, percent, &last_requested).await;
-                    let (channels, trust) = (devices.0.read().await, devices.1.read().await);
-                    match power_cap::write_caps(caps, &channels, &trust, cfg.creds.as_ref()).await {
+                    let (channels, trust) = (devices.channels.read().await, devices.trust.read().await);
+                    match power_cap::write_caps(caps, &channels, &trust, &locked, cfg.creds.as_ref()).await {
                         Ok(()) => controller.confirm(percent),
                         Err(e) => warn!(poi = %cfg.poi_topic, error = format!("{e:#}"), "compute shed write failed"),
                     }

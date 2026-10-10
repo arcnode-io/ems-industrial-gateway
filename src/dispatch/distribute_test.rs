@@ -113,7 +113,14 @@ fn compute_shares_splits_equally_across_two_standby_children() {
         recharge_power_w: None,
     };
     // Act
-    let mut shares = compute_shares(&binding, 200_000.0, "local_site", &cache).unwrap();
+    let mut shares = compute_shares(
+        &binding,
+        200_000.0,
+        "local_site",
+        &cache,
+        &Default::default(),
+    )
+    .unwrap();
     shares.sort_by(|a, b| a.0.cmp(&b.0));
     // Assert
     assert_eq!(
@@ -175,7 +182,8 @@ fn sorted_shares(
     target: f64,
     cache: &InputCache,
 ) -> Vec<(String, f64)> {
-    let mut shares = compute_shares(binding, target, "local_site", cache).unwrap();
+    let mut shares =
+        compute_shares(binding, target, "local_site", cache, &Default::default()).unwrap();
     shares.sort_by(|a, b| a.0.cmp(&b.0));
     shares
 }
@@ -246,6 +254,7 @@ async fn a_command_on_an_envelope_guarded_module_writes_no_child() {
         "local_site",
         &HashMap::new(),
         &HashMap::new(),
+        &Default::default(),
         None,
         &cache,
     )

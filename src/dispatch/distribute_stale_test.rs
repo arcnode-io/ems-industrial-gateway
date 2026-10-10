@@ -45,7 +45,8 @@ fn a_rack_gone_quiet_gets_zero_and_its_share_moves() {
     heard(&cache, 1, "DISCHARGING", stale());
     heard(&cache, 2, "DISCHARGING", Instant::now());
     // Act
-    let mut shares = compute_shares(&module(), 800_000.0, "s", &cache).unwrap();
+    let mut shares =
+        compute_shares(&module(), 800_000.0, "s", &cache, &Default::default()).unwrap();
     shares.sort_by(|a, b| a.0.cmp(&b.0));
     // Assert
     assert_eq!(
@@ -62,7 +63,7 @@ fn a_faulted_rack_is_told_zero_not_left_alone() {
     let cache = new_input_cache();
     heard(&cache, 1, "FAULT", Instant::now());
     heard(&cache, 2, "DISCHARGING", Instant::now());
-    let shares = compute_shares(&module(), 800_000.0, "s", &cache).unwrap();
+    let shares = compute_shares(&module(), 800_000.0, "s", &cache, &Default::default()).unwrap();
     assert!(shares.contains(&("rack_1".to_string(), 0.0)), "{shares:?}");
 }
 
@@ -71,7 +72,7 @@ fn with_every_rack_quiet_the_module_goes_to_zero() {
     let cache = new_input_cache();
     heard(&cache, 1, "DISCHARGING", stale());
     heard(&cache, 2, "DISCHARGING", stale());
-    let shares = compute_shares(&module(), 800_000.0, "s", &cache).unwrap();
+    let shares = compute_shares(&module(), 800_000.0, "s", &cache, &Default::default()).unwrap();
     assert!(
         shares.iter().all(|(_, w)| *w == 0.0) && shares.len() == 2,
         "{shares:?}"
@@ -83,5 +84,5 @@ fn a_rack_never_heard_from_still_holds() {
     // startup: no reading yet is not a reading gone stale
     let cache = new_input_cache();
     heard(&cache, 2, "DISCHARGING", Instant::now());
-    assert!(compute_shares(&module(), 800_000.0, "s", &cache).is_err());
+    assert!(compute_shares(&module(), 800_000.0, "s", &cache, &Default::default()).is_err());
 }

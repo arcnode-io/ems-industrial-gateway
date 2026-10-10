@@ -66,7 +66,8 @@ fn discovers_modules_with_distribute_bindings_and_cached_soc() {
     channels.insert("bess_module_1".to_string(), commands);
 
     // Act
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
+    let modules =
+        modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0, &Default::default()).unwrap();
 
     // Assert
     assert_eq!(modules.len(), 1);
@@ -92,7 +93,8 @@ fn headroom_is_direction_dependent_on_target_sign() {
     channels.insert("bess_module_1".to_string(), commands);
 
     // Act
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, -100_000.0).unwrap();
+    let modules =
+        modules_with_bounds(&channels, &cache, SITE_ID, -100_000.0, &Default::default()).unwrap();
 
     // Assert
     assert_eq!(modules[0].headroom, 8_000_000.0);
@@ -111,7 +113,7 @@ fn holds_when_a_known_modules_soc_is_not_cached() {
     channels.insert("bess_module_1".to_string(), commands);
 
     // Act
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0);
+    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0, &Default::default());
 
     // Assert
     assert!(modules.is_none());
@@ -128,7 +130,8 @@ fn skips_devices_without_a_distribute_bound_set_active_power_command() {
     channels.insert("rack_1".to_string(), commands);
 
     // Act
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
+    let modules =
+        modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0, &Default::default()).unwrap();
 
     // Assert
     assert!(modules.is_empty());
@@ -138,7 +141,8 @@ fn skips_devices_without_a_distribute_bound_set_active_power_command() {
 fn empty_channels_yields_no_modules() {
     let cache = new_input_cache();
     let channels = HashMap::new();
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
+    let modules =
+        modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0, &Default::default()).unwrap();
     assert!(modules.is_empty());
 }
 
@@ -173,7 +177,8 @@ fn a_modules_headroom_is_capped_by_its_racks_live_limits() {
     )]);
 
     // Act
-    let modules = modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0).unwrap();
+    let modules =
+        modules_with_bounds(&channels, &cache, SITE_ID, 400_000.0, &Default::default()).unwrap();
 
     // Assert
     assert_eq!(modules[0].headroom, 2_890_500.0);

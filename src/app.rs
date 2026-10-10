@@ -3,7 +3,8 @@
 //! Boot order:
 //! 1. Connect to MQTT broker
 //! 2. Subscribe to `system/topology_changed` (watch::Receiver)
-//! 3. Fetch `/asyncapi` once for the initial spec
+//! 3. Fetch `/asyncapi` once for the initial spec, then `/loto` (exits if
+//!    either won't answer); `system/loto_changed` re-fetches `/loto`
 //! 4. Spawn one tokio task per (device, measurement) — each owns its own
 //!    `interval` and a child `CancellationToken`.
 //! 5. Loop `select! { beacon changed => respawn all, cancel => break }`.
@@ -17,8 +18,9 @@ use crate::der_dispatch;
 use crate::dispatch;
 use crate::envelope;
 use crate::envelope::shed_task::{self, ShedTaskConfig};
-use crate::http::client::fetch_asyncapi;
+use crate::http::client::{fetch_asyncapi, fetch_loto};
 use crate::inputs;
+use crate::loto;
 use crate::mqtt::{publisher, subscriber};
 use crate::payload;
 use crate::poller;
@@ -27,7 +29,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -78,8 +80,16 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
     let cache = synthetic::new_input_cache();
     // Device/channel bindings backing dispatch — refreshed on every
     // successful spec re-fetch so accepts/rejects/writes track live topology.
-    let device_channels_map = Arc::new(RwLock::new(device_channels(&initial_spec)));
-    let device_trust_map = Arc::new(RwLock::new(initial_spec.x_device_trust.clone()));
+    // Reason: no command may be handled before the lockouts are known, so
+    // a /loto that won't answer stops the gateway here.
+    let locked = fetch_loto(&cfg.device_api_url).await?;
+    info!(locked = locked.len(), "lockouts fetched");
+    let devices = dispatch::Devices {
+        channels: Arc::new(RwLock::new(device_channels(&initial_spec))),
+        trust: Arc::new(RwLock::new(initial_spec.x_device_trust.clone())),
+        locked: Arc::new(RwLock::new(locked)),
+    };
+    let (loto_tx, loto_rx) = watch::channel(0u64);
     // Last real operator/dispatcher setpoint per (device, command) — the
     // envelope actuation loop's ramp-back target. Empty at boot; populated
     // as real commands arrive. Not reset on reconcile (a topology refresh
@@ -94,12 +104,16 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         &input_topics,
         cache.clone(),
         &cfg.site_id,
-        device_channels_map.clone(),
-        device_trust_map.clone(),
+        devices.clone(),
+        loto_tx.clone(),
         cfg.gateway_credentials.clone(),
         last_requested.clone(),
     )
     .await?;
+    // Reason: a lock set between the fetch above and the subscribe sent its
+    // beacon to nobody; one re-fetch closes that gap.
+    loto_tx.send_modify(|n| *n = n.wrapping_add(1));
+    let _loto = loto::refresher::spawn(cfg.device_api_url.clone(), devices.locked.clone(), loto_rx);
 
     let (mut task_handles, mut task_cancel) = spawn_task_set(
         &initial_spec,
@@ -107,8 +121,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
         client.clone(),
         cache.clone(),
         last_requested.clone(),
-        device_channels_map.clone(),
-        device_trust_map.clone(),
+        devices.clone(),
         site_event.clone(),
     );
 
@@ -135,7 +148,7 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                         warn!(error = %e, "respawn fetch failed; keeping current task set");
                         // Re-spawn the last good set so we don't end up idle.
                         let (h, c) =
-                            spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
+                            spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), devices.clone(), site_event.clone());
                         task_handles = h;
                         task_cancel = c;
                         continue;
@@ -147,21 +160,21 @@ pub async fn run(cfg: Config, cancel: CancellationToken) -> Result<()> {
                 {
                     warn!(error = %e, "new spec fails trust/creds alignment; keeping current task set");
                     let (h, c) =
-                        spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
+                        spawn_task_set(&current_spec, &cfg, client.clone(), cache.clone(), last_requested.clone(), devices.clone(), site_event.clone());
                     task_handles = h;
                     task_cancel = c;
                     continue;
                 }
                 // Only an accepted spec reaches command dispatch.
-                *device_channels_map.write().await = device_channels(&fresh);
-                *device_trust_map.write().await = fresh.x_device_trust.clone();
+                *devices.channels.write().await = device_channels(&fresh);
+                *devices.trust.write().await = fresh.x_device_trust.clone();
                 if let Err(e) = subscriptions
                     .update(&client, &inputs::input_topics(&fresh, &cfg.site_id))
                     .await
                 {
                     warn!(error = %e, "subscriptions did not follow the topology change");
                 }
-                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), device_channels_map.clone(), device_trust_map.clone(), site_event.clone());
+                let (h, c) = spawn_task_set(&fresh, &cfg, client.clone(), cache.clone(), last_requested.clone(), devices.clone(), site_event.clone());
                 task_handles = h;
                 task_cancel = c;
                 current_spec = fresh;
@@ -208,8 +221,7 @@ fn spawn_task_set(
     client: paho_mqtt::AsyncClient,
     cache: InputCache,
     last_requested: dispatch::LastRequestedSetpoints,
-    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    devices: dispatch::Devices,
     site_event: der_dispatch::SharedEventMemory,
 ) -> (JoinSet<()>, CancellationToken) {
     let parent = CancellationToken::new();
@@ -328,8 +340,7 @@ fn spawn_task_set(
                 cfg.site_id.clone(),
                 cache.clone(),
                 last_requested.clone(),
-                device_channels.clone(),
-                device_trust.clone(),
+                devices.clone(),
                 cfg.gateway_credentials.clone(),
                 parent.child_token(),
             );
@@ -343,12 +354,11 @@ fn spawn_task_set(
     for mut c in ShedTaskConfig::per_poi(shed_configs) {
         c.storage = storage.clone();
         let modules = c.modules.len();
-        let devices = (device_channels.clone(), device_trust.clone());
         let h = shed_task::spawn(
             c,
             cache.clone(),
             last_requested.clone(),
-            devices,
+            devices.clone(),
             parent.child_token(),
         );
         handles.spawn(async move {
@@ -400,10 +410,7 @@ fn spawn_task_set(
         site_distribution_cfg,
         cache.clone(),
         client.clone(),
-        der_dispatch::Devices {
-            channels: device_channels.clone(),
-            trust: device_trust.clone(),
-        },
+        devices.clone(),
         last_requested.clone(),
         site_event,
         parent.child_token(),

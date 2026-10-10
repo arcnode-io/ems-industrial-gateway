@@ -6,9 +6,9 @@ use crate::asyncapi::types::ProtocolBinding;
 use crate::dispatch::allocation::{ChildCapacity, OperatingState};
 use crate::dispatch::rack_limits;
 use crate::synthetic::{InputCache, as_number};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// Every distribute-parent device (a `bess_module`) with a resolvable
+/// Every distribute-parent device (a `bess_module`) not locked out, with a resolvable
 /// power_min/power_max (from its own Distribute binding, capped by its
 /// racks' live limits) and cached
 /// state_of_charge. `None` if any known module's state_of_charge isn't
@@ -19,12 +19,16 @@ pub(super) fn modules_with_bounds(
     cache: &InputCache,
     site_id: &str,
     target: f64,
+    locked: &HashSet<String>,
 ) -> Option<Vec<ChildCapacity>> {
     let mut modules = Vec::new();
     for (device_id, commands) in channels {
         let Some(ProtocolBinding::Distribute(d)) = commands.get(CHANNEL_KEY) else {
             continue;
         };
+        if locked.contains(device_id) {
+            continue;
+        }
         let (Some(power_min), Some(power_max)) = (d.power_min, d.power_max) else {
             continue;
         };
@@ -41,6 +45,7 @@ pub(super) fn modules_with_bounds(
         let racks_w: f64 = d
             .children
             .iter()
+            .filter(|c| !locked.contains(&c.device_id))
             .map(|c| rack_limits::headroom(c, target, site_id, cache))
             .sum();
         let headroom = if d.children.is_empty() {
@@ -61,3 +66,7 @@ pub(super) fn modules_with_bounds(
 #[cfg(test)]
 #[path = "module_bounds_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "module_bounds_loto_test.rs"]
+mod loto_tests;

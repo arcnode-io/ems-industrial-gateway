@@ -103,8 +103,8 @@ async fn operator_command_gets_received_then_done_and_a_foreign_one_no_ack() -> 
         &[],
         new_input_cache(),
         SITE,
-        channels,
-        Arc::new(RwLock::new(HashMap::new())),
+        devices(channels),
+        tokio::sync::watch::channel(0).0,
         None,
         Arc::new(RwLock::new(HashMap::new())),
     )
@@ -169,8 +169,8 @@ async fn malformed_command_frame_is_dropped_without_acks() -> Result<()> {
         &[],
         new_input_cache(),
         SITE,
-        channels,
-        Arc::new(RwLock::new(HashMap::new())),
+        devices(channels),
+        tokio::sync::watch::channel(0).0,
         None,
         Arc::new(RwLock::new(HashMap::new())),
     )
@@ -211,8 +211,8 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
         &[],
         new_input_cache(),
         SITE,
-        channels,
-        Arc::new(RwLock::new(HashMap::new())),
+        devices(channels),
+        tokio::sync::watch::channel(0).0,
         None,
         Arc::new(RwLock::new(HashMap::new())),
     )
@@ -249,4 +249,15 @@ async fn late_subscriber_recovers_terminal_state_from_retained_event() -> Result
     operator.disconnect(None).await?;
     gateway.disconnect(None).await?;
     Ok(())
+}
+
+/// The gateway's device handles over `channels`, nothing trusted or locked.
+fn devices(
+    channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
+) -> ems_industrial_gateway::dispatch::Devices {
+    ems_industrial_gateway::dispatch::Devices {
+        channels,
+        trust: Arc::new(RwLock::new(HashMap::new())),
+        locked: Default::default(),
+    }
 }

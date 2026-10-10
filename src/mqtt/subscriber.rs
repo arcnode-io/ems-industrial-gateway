@@ -1,5 +1,6 @@
-//! MQTT subscriber: handles both the `system/topology_changed` beacon AND
-//! per-channel measurement topics that feed the synthetic-channel cache.
+//! MQTT subscriber: handles the `system/topology_changed` and
+//! `system/loto_changed` beacons, commands, AND per-channel measurement
+//! topics that feed the synthetic-channel cache.
 //!
 //! One paho `get_stream()` per client (paho enforces this), so this module
 //! owns the single subscriber stream and demuxes by topic: beacons increment
@@ -7,20 +8,15 @@
 //! reconciler); per-channel samples write into the shared
 //! `InputCache` for synthetic tasks to read on their next tick.
 
-use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
-use crate::dispatch::{self, LastRequestedSetpoints};
-use crate::mqtt::subscriptions::{Subscriptions, TOPIC_TOPOLOGY_CHANGED};
+use crate::dispatch::{self, Devices, LastRequestedSetpoints};
+use crate::mqtt::subscriptions::{Subscriptions, TOPIC_LOTO_CHANGED, TOPIC_TOPOLOGY_CHANGED};
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use paho_mqtt::AsyncClient;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tracing::{info, trace, warn};
 
@@ -48,8 +44,8 @@ pub async fn subscribe(
     input_topics: &[String],
     cache: InputCache,
     site_id: &str,
-    device_channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    device_trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
+    devices: Devices,
+    loto_beacons: watch::Sender<u64>,
     creds: Option<GatewayCredentials>,
     last_requested: LastRequestedSetpoints,
 ) -> Result<(watch::Receiver<u64>, Subscriptions)> {
@@ -96,14 +92,18 @@ pub async fn subscribe(
                 if tx.send(beacon_count).is_err() {
                     break;
                 }
+            } else if msg.topic() == TOPIC_LOTO_CHANGED {
+                loto_beacons.send_modify(|n| *n = n.wrapping_add(1));
             } else if msg.topic().contains("/commands/") {
-                let channels = device_channels.read().await;
-                let trust = device_trust.read().await;
+                let channels = devices.channels.read().await;
+                let trust = devices.trust.read().await;
+                let locked = devices.locked.read().await;
                 if let Err(err) = dispatch::handle_command(
                     &event_client,
                     &site,
                     &channels,
                     &trust,
+                    &locked,
                     creds.as_ref(),
                     &cache,
                     &last_requested,

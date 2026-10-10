@@ -7,19 +7,36 @@
 
 use serde_json::{Value, json};
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 /// Spawn a wiremock that returns the given AsyncAPI body verbatim from
-/// `GET /asyncapi`.
+/// `GET /asyncapi`, with nothing locked out on `GET /loto`.
 pub async fn spawn_asyncapi_stub(body: Value) -> MockServer {
+    spawn_lockable_stub(body).await.0
+}
+
+/// `spawn_asyncapi_stub`, plus the list `GET /loto` serves as its expanded
+/// set: change it to lock or clear devices.
+pub async fn spawn_lockable_stub(body: Value) -> (MockServer, Arc<Mutex<Vec<String>>>) {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/asyncapi"))
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(&server)
         .await;
-    server
+    let locked = Arc::new(Mutex::new(Vec::new()));
+    let serving = locked.clone();
+    Mock::given(method("GET"))
+        .and(path("/loto"))
+        .respond_with(move |_: &Request| {
+            let ids = serving.lock().unwrap().clone();
+            ResponseTemplate::new(200).set_body_json(json!({ "locks": [], "locked_devices": ids }))
+        })
+        .mount(&server)
+        .await;
+    (server, locked)
 }
 
 /// Assemble an AsyncAPI body for a single (device_id, measurement) →

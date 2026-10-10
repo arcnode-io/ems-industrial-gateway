@@ -11,6 +11,8 @@ use tracing::info;
 
 /// MQTT topic the gateway subscribes to for topology-change beacons.
 pub const TOPIC_TOPOLOGY_CHANGED: &str = "system/topology_changed";
+/// Beacon device-api sends after a lockout is set or cleared.
+pub const TOPIC_LOTO_CHANGED: &str = "system/loto_changed";
 /// QoS for the beacon subscription. At-least-once is fine — `watch` collapses
 /// duplicates into a single wake anyway.
 const BEACON_QOS: i32 = 1;
@@ -20,13 +22,14 @@ const MEASUREMENT_QOS: i32 = 0;
 const COMMAND_QOS: i32 = 1;
 
 /// Every topic the gateway subscribes to, paired with its QoS: the topology
-/// beacon, the site's commands filter, then each measurement input.
+/// and lockout beacons, the site's commands filter, then each measurement input.
 pub fn subscription_list(site_id: &str, input_topics: &[String]) -> (Vec<String>, Vec<i32>) {
     let mut topics = vec![
         TOPIC_TOPOLOGY_CHANGED.to_string(),
+        TOPIC_LOTO_CHANGED.to_string(),
         format!("sites/{site_id}/devices/+/commands/#"),
     ];
-    let mut qos = vec![BEACON_QOS, COMMAND_QOS];
+    let mut qos = vec![BEACON_QOS, BEACON_QOS, COMMAND_QOS];
     for topic in input_topics {
         topics.push(topic.clone());
         qos.push(MEASUREMENT_QOS);
@@ -108,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn subscription_list_covers_beacon_commands_and_every_input() {
+    fn subscription_list_covers_beacons_commands_and_every_input() {
         // Arrange
         let inputs = vec!["sites/s/devices/a/measurements/x/watts".to_string()];
         // Act
@@ -118,11 +121,15 @@ mod tests {
             topics,
             vec![
                 TOPIC_TOPOLOGY_CHANGED.to_string(),
+                TOPIC_LOTO_CHANGED.to_string(),
                 "sites/s/devices/+/commands/#".to_string(),
                 inputs[0].clone(),
             ]
         );
-        assert_eq!(qos, vec![BEACON_QOS, COMMAND_QOS, MEASUREMENT_QOS]);
+        assert_eq!(
+            qos,
+            vec![BEACON_QOS, BEACON_QOS, COMMAND_QOS, MEASUREMENT_QOS]
+        );
     }
 
     #[test]

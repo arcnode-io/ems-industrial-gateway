@@ -53,7 +53,7 @@ fn spare_is_the_rated_discharge_the_racks_can_add() {
     // Arrange — 1 MW rated, delivering 300 kW, both racks above floor
     let cache = cache([60.0, 60.0], 300_000.0);
     // Act
-    let spare = module_spare_w(&module(), "s", &cache);
+    let spare = module_spare_w(&module(), "s", &cache, &Default::default());
     // Assert
     assert_eq!(spare, 700_000.0);
 }
@@ -63,14 +63,17 @@ fn a_rack_at_its_floor_adds_nothing() {
     // Arrange — rack 2 at the floor: only rack 1's 500 kW is deliverable
     let cache = cache([60.0, 20.0], 300_000.0);
     // Act
-    let spare = module_spare_w(&module(), "s", &cache);
+    let spare = module_spare_w(&module(), "s", &cache, &Default::default());
     // Assert
     assert_eq!(spare, 200_000.0);
 }
 
 #[test]
 fn no_spare_without_a_reading() {
-    assert_eq!(module_spare_w(&module(), "s", &new_input_cache()), 0.0);
+    assert_eq!(
+        module_spare_w(&module(), "s", &new_input_cache(), &Default::default()),
+        0.0
+    );
 }
 
 #[test]
@@ -79,6 +82,12 @@ fn only_batteries_on_the_same_poi_count() {
     let cache = cache([60.0, 60.0], 300_000.0);
     let other = "sites/s/devices/other_poi/measurements/active_power/watts";
     // Act + Assert
-    assert_eq!(spare_w(&[module()], POI, "s", &cache), 700_000.0);
-    assert_eq!(spare_w(&[module()], other, "s", &cache), 0.0);
+    assert_eq!(
+        spare_w(&[module()], POI, "s", &cache, &Default::default()),
+        700_000.0
+    );
+    assert_eq!(
+        spare_w(&[module()], other, "s", &cache, &Default::default()),
+        0.0
+    );
 }

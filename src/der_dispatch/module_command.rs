@@ -2,24 +2,11 @@
 //! an operator's command goes through, without touching the broker.
 
 use super::site_distribution::SiteDistributionConfig;
-use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::ProtocolBinding;
-use crate::dispatch::{self, LastRequestedSetpoints};
+use crate::dispatch::{self, Devices, LastRequestedSetpoints};
 use crate::synthetic::InputCache;
 use chrono::Utc;
 use paho_mqtt::AsyncClient;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::warn;
-
-/// Live device maps the command handler resolves a module's binding from.
-pub struct Devices {
-    /// Device → channel → binding, refreshed on every spec re-fetch.
-    pub channels: Arc<RwLock<HashMap<String, HashMap<String, ProtocolBinding>>>>,
-    /// Device → trust material, refreshed alongside `channels`.
-    pub trust: Arc<RwLock<HashMap<String, DeviceTrust>>>,
-}
 
 /// Hand one command for `module_id` to `dispatch::handle_command`, exactly
 /// as an operator's would arrive — acks on events/, last_requested capture,
@@ -49,11 +36,13 @@ pub(super) async fn dispatch_one(
     );
     let channels = devices.channels.read().await;
     let trust = devices.trust.read().await;
+    let locked = devices.locked.read().await;
     let handled = dispatch::handle_command(
         mqtt,
         &cfg.site_id,
         &channels,
         &trust,
+        &locked,
         cfg.creds.as_ref(),
         cache,
         last_requested,

@@ -81,7 +81,15 @@ async fn a_fleet_cap_writes_every_gpus_own_limit() {
             })
             .collect();
     // Act
-    let written = dispatch_power_cap(&two_gpus(), 81.0, &channels, &HashMap::new(), None).await;
+    let written = dispatch_power_cap(
+        &two_gpus(),
+        81.0,
+        &channels,
+        &HashMap::new(),
+        &Default::default(),
+        None,
+    )
+    .await;
     // Assert — the stub's expect(2) verifies on drop
     assert!(written.is_ok(), "{written:?}");
 }
@@ -93,4 +101,25 @@ fn caps_are_whole_watts() {
     assert_eq!(child_caps(&two_gpus(), floor_percent)[0].2, 200.0);
     // a fraction of a watt rounds up: a cap never cuts more than asked
     assert_eq!(child_caps(&two_gpus(), 81.04)[0].2, 811.0);
+}
+
+#[tokio::test]
+async fn a_locked_gpu_node_is_never_written() {
+    // Arrange — the node isn't even bound; a write attempt would fail
+    let caps = super::child_caps(&two_gpus(), 50.0)
+        .into_iter()
+        .filter(|c| c.0 == "gpu_node_01")
+        .collect();
+    let locked = std::collections::HashSet::from(["gpu_node_01".to_string()]);
+    // Act
+    let result = super::write_caps(
+        caps,
+        &Default::default(),
+        &Default::default(),
+        &locked,
+        None,
+    )
+    .await;
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
 }

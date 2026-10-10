@@ -12,7 +12,7 @@ use crate::envelope;
 use crate::modbus::client as modbus;
 use crate::synthetic::{InputCache, as_number};
 use anyhow::{Context, Result, anyhow};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 /// Resolve + execute a distribute command: `compute_shares` then
@@ -32,6 +32,7 @@ pub async fn dispatch_distribute(
     site_id: &str,
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
+    locked: &HashSet<String>,
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
 ) -> Result<()> {
@@ -42,7 +43,7 @@ pub async fn dispatch_distribute(
         );
         return Ok(());
     }
-    let shares = compute_shares(binding, target, site_id, cache)?;
+    let shares = compute_shares(binding, target, site_id, cache, locked)?;
     write_shares(&shares, channel_key, device_channels, device_trust, creds).await?;
     if target != 0.0 && shares.iter().all(|(_, w)| *w == 0.0) {
         return Err(anyhow!("no rack could take {target} W; all held at 0 W"));
@@ -52,19 +53,23 @@ pub async fn dispatch_distribute(
 
 /// Read each child's cached `operating_state`/`state_of_charge` and allocate
 /// `target` across eligible children (max-min fair share); every other child
-/// gets 0 W. Pure aside from the cache reads: no I/O, no writes. Errors if a
+/// gets 0 W, except a `locked` one, which is left out entirely. Pure aside from the cache reads: no I/O, no writes. Errors if a
 /// child has never reported.
 pub fn compute_shares(
     binding: &DistributeBinding,
     target: f64,
     site_id: &str,
     cache: &InputCache,
+    locked: &HashSet<String>,
 ) -> Result<Vec<(String, f64)>> {
     let policy = AllocationPolicy::parse(&binding.allocation_policy)?;
     let floor = reserve::effective_floor_percent(binding, site_id, cache);
+    // Reason: a locked-out rack belongs to whoever is working on it; it gets
+    // no share and no write, not even 0 W.
     let children: Vec<ChildCapacity> = binding
         .children
         .iter()
+        .filter(|c| !locked.contains(&c.device_id))
         .map(|c| resolve_child(c, target, site_id, cache))
         .map(|child| child.map(|c| apply_reserve_floor(floor, c, target)))
         .collect::<Result<_>>()?;
@@ -174,3 +179,7 @@ mod tests;
 #[cfg(test)]
 #[path = "distribute_stale_test.rs"]
 mod stale_tests;
+
+#[cfg(test)]
+#[path = "distribute_loto_test.rs"]
+mod loto_tests;

@@ -7,7 +7,7 @@ use crate::config::GatewayCredentials;
 use crate::redfish;
 use anyhow::{Result, bail};
 use futures::{StreamExt, stream};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Cap writes in flight at once. Reason: a site has ~800 GPU limits; all at
 /// once would open as many connections, and BMCs share hosts in the demo.
@@ -33,30 +33,38 @@ pub fn child_caps(binding: &PowerCapBinding, percent: f64) -> Vec<(String, Strin
 ///
 /// Fails if any child's write fails, naming every one that did; the others
 /// still land.
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_power_cap(
     binding: &PowerCapBinding,
     percent: f64,
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
+    locked: &HashSet<String>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<()> {
     write_caps(
         child_caps(binding, percent),
         device_channels,
         device_trust,
+        locked,
         creds,
     )
     .await
 }
 
 /// Write `(device_id, command key, cap W)` caps, `CONCURRENT_WRITES` at a
-/// time.
+/// time. A locked-out child is skipped: it keeps whatever cap it has.
 pub async fn write_caps(
     caps: Vec<(String, String, f64)>,
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
+    locked: &HashSet<String>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<()> {
+    let caps: Vec<_> = caps
+        .into_iter()
+        .filter(|c| !locked.contains(&c.0))
+        .collect();
     let failed: Vec<String> = stream::iter(caps)
         .map(|cap| async move {
             write_one(&cap, device_channels, device_trust, creds)

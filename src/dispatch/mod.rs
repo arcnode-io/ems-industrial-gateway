@@ -25,6 +25,7 @@
 pub mod allocation;
 #[cfg(test)]
 mod allocation_test;
+mod devices;
 mod distribute;
 mod operating_state;
 pub(crate) mod power_cap;
@@ -35,6 +36,7 @@ mod write_order;
 #[cfg(test)]
 mod write_order_test;
 
+pub use devices::Devices;
 pub(crate) use distribute::{compute_shares, write_shares};
 pub use topic::{CommandTopic, parse_command_topic};
 pub(crate) use write_order::{handoff_batch, reductions_first};
@@ -49,7 +51,7 @@ use anyhow::{Context, Result, anyhow};
 use paho_mqtt::AsyncClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -115,13 +117,15 @@ pub fn event_payload(
 /// to); commands for a device with no binding here are another service's and
 /// are ignored. `Phase::Done` means the write to the south-side device
 /// succeeded; `Phase::Failed` covers unknown command, unsupported protocol,
-/// and write errors alike.
+/// write errors and a locked-out device alike; a locked-out device's
+/// command is never recorded as its requested setpoint.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_command(
     client: &AsyncClient,
     site_id: &str,
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
+    locked: &HashSet<String>,
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
     last_requested: &RwLock<HashMap<String, HashMap<String, f64>>>,
@@ -149,6 +153,18 @@ pub async fn handle_command(
     };
     let events = event_topic(site_id, device_id);
     publish_event(client, &events, &frame.command_id, Phase::Received, None).await?;
+    if locked.contains(device_id) {
+        warn!(%device_id, command_id = %frame.command_id, "dispatch rejected — locked out");
+        let reason = format!("device {device_id} is locked out");
+        return publish_event(
+            client,
+            &events,
+            &frame.command_id,
+            Phase::Failed,
+            Some(&reason),
+        )
+        .await;
+    }
 
     let channel_key = format!("{}_{}", cmd_topic.verb, cmd_topic.target);
     let Some(binding) = channels.get(&channel_key) else {
@@ -182,6 +198,7 @@ pub async fn handle_command(
         site_id,
         device_channels,
         device_trust,
+        locked,
         creds,
         cache,
     )
@@ -219,6 +236,7 @@ pub(crate) async fn execute_setpoint(
     site_id: &str,
     device_channels: &HashMap<String, HashMap<String, ProtocolBinding>>,
     device_trust: &HashMap<String, DeviceTrust>,
+    locked: &HashSet<String>,
     creds: Option<&GatewayCredentials>,
     cache: &InputCache,
 ) -> Result<()> {
@@ -232,7 +250,8 @@ pub(crate) async fn execute_setpoint(
             redfish::write::write_setpoint(b, value, trust, creds).await
         }
         ProtocolBinding::PowerCap(p) => {
-            power_cap::dispatch_power_cap(p, value, device_channels, device_trust, creds).await
+            power_cap::dispatch_power_cap(p, value, device_channels, device_trust, locked, creds)
+                .await
         }
         ProtocolBinding::Distribute(d) => {
             distribute::dispatch_distribute(
@@ -242,6 +261,7 @@ pub(crate) async fn execute_setpoint(
                 site_id,
                 device_channels,
                 device_trust,
+                locked,
                 creds,
                 cache,
             )

@@ -1,3 +1,3 @@
-//! HTTP client for /asyncapi.
+//! HTTP client for /asyncapi and /loto.
 
 pub mod client;
