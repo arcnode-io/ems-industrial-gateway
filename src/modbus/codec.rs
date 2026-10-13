@@ -120,66 +120,35 @@ pub fn decode_raw(words: &[u16], data_type: ModbusDataType, order: WordOrder) ->
 }
 
 /// Encode a raw (pre-scale) numeric value into the registers its data type
-/// spans. Inverse of `decode_raw`.
-pub fn encode_raw(raw: f64, data_type: ModbusDataType, order: WordOrder) -> Vec<u16> {
-    match data_type {
+/// spans. Inverse of `decode_raw`. Errs when it isn't finite or doesn't fit
+/// the type. Reason: `as` saturates, so 1 TW into an int32 register would
+/// write i32::MAX and ack as done.
+pub fn encode_raw(
+    raw: f64,
+    data_type: ModbusDataType,
+    order: WordOrder,
+) -> Result<Vec<u16>, String> {
+    // [min, max) of the rounded value, per integer type.
+    let range = |min: f64, max: f64| raw.is_finite() && (min..max).contains(&raw.round());
+    let fits = match data_type {
+        ModbusDataType::Uint16 => range(0.0, 65_536.0),
+        ModbusDataType::Int16 => range(-32_768.0, 32_768.0),
+        ModbusDataType::Int32 => range(-2_147_483_648.0, 2_147_483_648.0),
+        ModbusDataType::Uint32 => range(0.0, 4_294_967_296.0),
+        ModbusDataType::Int64 => range(-9.223_372_036_854_776e18, 9.223_372_036_854_776e18),
+        ModbusDataType::Float32 => (raw as f32).is_finite(),
+    };
+    if !fits {
+        return Err(format!("{raw} doesn't fit a {data_type:?} register"));
+    }
+    Ok(match data_type {
         ModbusDataType::Uint16 => vec![raw.round() as u16],
         ModbusDataType::Int16 => vec![(raw.round() as i16) as u16],
         ModbusDataType::Int32 => encode_int32(raw.round() as i32, order).to_vec(),
         ModbusDataType::Uint32 => encode_uint32(raw.round() as u32, order).to_vec(),
         ModbusDataType::Float32 => encode_uint32((raw as f32).to_bits(), order).to_vec(),
         ModbusDataType::Int64 => encode_int64(raw.round() as i64, order).to_vec(),
-    }
-}
-
-/// Which register space a measurement reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadFunction {
-    /// Function code 3, holding registers.
-    Holding,
-    /// Function code 4, input registers.
-    Input,
-}
-
-/// How a command writes its registers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteFunction {
-    /// Function code 6, write single register.
-    Single,
-    /// Function code 16, write multiple registers.
-    Multiple,
-}
-
-/// A measurement binding's read function code. Absent = 3 (holding), which
-/// every binding predating the field used.
-pub fn read_function(code: Option<u8>) -> Result<ReadFunction, String> {
-    match code {
-        None | Some(3) => Ok(ReadFunction::Holding),
-        Some(4) => Ok(ReadFunction::Input),
-        Some(other) => Err(format!(
-            "function_code {other} is not a register read (3 or 4)"
-        )),
-    }
-}
-
-/// A command binding's write function code, checked against its data type.
-/// Absent = 16 (write multiple), which every binding predating the field used.
-/// FC6 writes exactly one register, so a wider type would be truncated.
-pub fn write_function(
-    code: Option<u8>,
-    data_type: ModbusDataType,
-) -> Result<WriteFunction, String> {
-    match code {
-        None | Some(16) => Ok(WriteFunction::Multiple),
-        Some(6) if data_type.register_count() == 1 => Ok(WriteFunction::Single),
-        Some(6) => Err(format!(
-            "function_code 6 writes one register but {data_type:?} spans {}",
-            data_type.register_count()
-        )),
-        Some(other) => Err(format!(
-            "function_code {other} is not a register write (6 or 16)"
-        )),
-    }
+    })
 }
 
 /// Apply Modbus scale + offset to a raw reading.

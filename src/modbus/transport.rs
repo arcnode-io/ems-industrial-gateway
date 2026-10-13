@@ -2,7 +2,7 @@
 //! read or write registers on it with the binding's function code.
 
 use crate::config::GatewayCredentials;
-use crate::modbus::codec::{ReadFunction, WriteFunction};
+use crate::modbus::function_code::{ReadFunction, WriteFunction};
 use crate::modbus::tls;
 use anyhow::{Context, Result};
 use rodbus::client::{

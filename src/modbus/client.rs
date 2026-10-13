@@ -6,9 +6,8 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::ModbusTcpBinding;
 use crate::config::GatewayCredentials;
-use crate::modbus::codec::{
-    ReadFunction, WriteFunction, decode_raw, encode_raw, read_function, write_function,
-};
+use crate::modbus::codec::{decode_raw, encode_raw};
+use crate::modbus::function_code::{ReadFunction, WriteFunction, read_function, write_function};
 use crate::modbus::sunspec::apply_sunssf;
 use crate::modbus::transport::{read_registers, tcp_channel, tls_channel, write_registers};
 use anyhow::{Context, Result};
@@ -69,7 +68,8 @@ pub async fn write_setpoint(
     creds: Option<&GatewayCredentials>,
 ) -> Result<()> {
     let function = write_function(b.function_code, b.data_type).map_err(anyhow::Error::msg)?;
-    let words = encode_raw(to_raw(value, b.scale, b.offset), b.data_type, b.word_order);
+    let words = encode_raw(to_raw(value, b.scale, b.offset), b.data_type, b.word_order)
+        .map_err(anyhow::Error::msg)?;
     let channel = write_channel(b, trust, creds)?;
     write_registers(channel, unit_id(b)?, b.address, &words, function).await
 }

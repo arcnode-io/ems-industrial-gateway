@@ -3,7 +3,7 @@
 //! neighbor register (or, for a 1-register type, throws IllegalDataAddress
 //! reading past the end of the device's map).
 
-use super::codec::{ModbusDataType, WordOrder, decode_raw, encode_raw};
+use super::codec::{ModbusDataType, WordOrder, decode_raw, encode_raw, to_raw};
 
 #[test]
 fn register_count_matches_wire_width() {
@@ -64,7 +64,7 @@ fn encode_decode_raw_round_trips_for_every_data_type() {
         (ModbusDataType::Uint32, 65536.0),
         (ModbusDataType::Float32, 1.5),
     ] {
-        let words = encode_raw(raw, data_type, WordOrder::HighLow);
+        let words = encode_raw(raw, data_type, WordOrder::HighLow).unwrap();
         assert_eq!(
             decode_raw(&words, data_type, WordOrder::HighLow),
             raw,
@@ -104,7 +104,7 @@ fn int64_negative_decodes_as_twos_complement() {
 #[test]
 fn int64_round_trips_through_encode() {
     for order in [WordOrder::HighLow, WordOrder::LowHigh] {
-        let words = encode_raw(-123_456_789_012.0, ModbusDataType::Int64, order);
+        let words = encode_raw(-123_456_789_012.0, ModbusDataType::Int64, order).unwrap();
         assert_eq!(words.len(), 4);
         assert_eq!(
             decode_raw(&words, ModbusDataType::Int64, order),
@@ -119,49 +119,43 @@ fn int64_parses_from_the_wire_name() {
     assert_eq!(parsed, ModbusDataType::Int64);
 }
 
-use super::codec::{ReadFunction, WriteFunction, read_function, write_function};
-
 #[test]
-fn read_function_maps_fc3_and_fc4_and_defaults_to_holding() {
-    assert_eq!(read_function(None), Ok(ReadFunction::Holding));
-    assert_eq!(read_function(Some(3)), Ok(ReadFunction::Holding));
-    assert_eq!(read_function(Some(4)), Ok(ReadFunction::Input));
-}
-
-#[test]
-fn read_function_rejects_non_read_codes() {
-    // e.g. a write code (6, 16) or a coil read (1) on a measurement
-    for code in [1, 2, 6, 16] {
+fn a_value_too_big_for_its_register_is_refused_not_saturated() {
+    // 1 TW into an int32 W register; `as i32` would write i32::MAX
+    for (data_type, raw) in [
+        (ModbusDataType::Int32, 1e12),
+        (ModbusDataType::Uint16, 65_536.0),
+        (ModbusDataType::Uint16, -1.0),
+        (ModbusDataType::Int16, 40_000.0),
+        (ModbusDataType::Uint32, -1.0),
+        (ModbusDataType::Float32, 1e39),
+    ] {
         assert!(
-            read_function(Some(code)).is_err(),
-            "fc{code} accepted as a read"
+            encode_raw(raw, data_type, WordOrder::HighLow).is_err(),
+            "{data_type:?} took {raw}"
         );
     }
 }
 
 #[test]
-fn write_function_maps_fc6_and_fc16_and_defaults_to_multiple() {
-    assert_eq!(
-        write_function(None, ModbusDataType::Int32),
-        Ok(WriteFunction::Multiple)
-    );
-    assert_eq!(
-        write_function(Some(16), ModbusDataType::Int32),
-        Ok(WriteFunction::Multiple)
-    );
-    assert_eq!(
-        write_function(Some(6), ModbusDataType::Uint16),
-        Ok(WriteFunction::Single)
-    );
+fn a_non_finite_value_is_refused() {
+    // A binding with scale 0 divides by zero on the way to the register
+    let raw = to_raw(100.0, 0.0, 0.0);
+    assert!(encode_raw(raw, ModbusDataType::Int32, WordOrder::HighLow).is_err());
+    assert!(encode_raw(f64::NAN, ModbusDataType::Float32, WordOrder::HighLow).is_err());
 }
 
 #[test]
-fn fc6_cannot_write_a_multi_register_type() {
-    // FC6 writes exactly one register; an int32 would be silently truncated.
-    assert!(write_function(Some(6), ModbusDataType::Int32).is_err());
-}
-
-#[test]
-fn write_function_rejects_read_codes() {
-    assert!(write_function(Some(3), ModbusDataType::Uint16).is_err());
+fn the_edges_of_each_type_still_fit() {
+    for (data_type, raw) in [
+        (ModbusDataType::Int32, i32::MAX as f64),
+        (ModbusDataType::Int32, i32::MIN as f64),
+        (ModbusDataType::Uint16, 65_535.0),
+        (ModbusDataType::Int16, -32_768.0),
+    ] {
+        assert!(
+            encode_raw(raw, data_type, WordOrder::HighLow).is_ok(),
+            "{data_type:?} {raw}"
+        );
+    }
 }

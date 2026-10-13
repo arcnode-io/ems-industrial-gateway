@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod codec;
+pub mod function_code;
 pub mod sunspec;
 pub mod tls;
 pub mod transport;

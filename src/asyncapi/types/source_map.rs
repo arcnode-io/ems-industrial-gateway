@@ -17,7 +17,7 @@
 
 use super::{CommandSource, PowerCapBinding, ProtocolBinding, ProtocolSource};
 use crate::dnp3::master::point_kind;
-use crate::modbus::codec::{read_function, write_function};
+use crate::modbus::function_code::{read_function, write_function};
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use serde_json::Value;
