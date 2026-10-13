@@ -58,6 +58,11 @@ pub struct SnmpBinding {
     pub scale: f64,
 }
 
+/// `outstation_address` when a DNP3 spec omits it.
+fn default_outstation_address() -> u16 {
+    1024
+}
+
 /// `scale` when a spec omits it (SNMP, Redfish, DNP3).
 fn unit_scale() -> f64 {
     1.0
@@ -143,4 +148,8 @@ pub struct Dnp3TcpBinding {
     /// Absent = 1.0.
     #[serde(default = "unit_scale")]
     pub scale: f64,
+    /// The outstation's DNP3 link address, set at commissioning. Absent =
+    /// 1024, the common factory default.
+    #[serde(default = "default_outstation_address")]
+    pub outstation_address: u16,
 }

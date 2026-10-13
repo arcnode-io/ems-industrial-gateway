@@ -59,7 +59,7 @@ pub async fn spawn(pki: &TestPki) -> Result<Dnp3SecurityFixture> {
     )?;
     let mut server = Server::new_tls_server(LinkErrorMode::Close, addr, tls_config);
     let outstation = server.add_outstation(
-        outstation_config(),
+        outstation_config(1024),
         Box::new(App),
         Box::new(Info),
         Box::new(Ctl),
@@ -93,9 +93,9 @@ pub async fn spawn(pki: &TestPki) -> Result<Dnp3SecurityFixture> {
 /// Outstation config — single master at addr 1, this outstation at 1024.
 /// Mirrors `mock-dnp3-outstation` so the gateway client's master addr stays
 /// consistent across plain + TLS e2e tests.
-pub fn outstation_config() -> OutstationConfig {
+pub fn outstation_config(outstation: u16) -> OutstationConfig {
     OutstationConfig::new(
-        EndpointAddress::try_new(1024).expect("outstation addr"),
+        EndpointAddress::try_new(outstation).expect("outstation addr"),
         EndpointAddress::try_new(1).expect("master addr"),
         EventBufferConfig::new(0, 0, 0, 0, 0, 5, 0, 0),
     )

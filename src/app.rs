@@ -539,6 +539,7 @@ fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
             point_type: d.point_type.clone(),
             variation: d.variation,
             scale: d.scale,
+            outstation_address: d.outstation_address,
         }),
         ProtocolBinding::Synthetic(s) => ProtocolBinding::Synthetic(SyntheticBinding {
             operation: s.operation.clone(),

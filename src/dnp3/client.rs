@@ -40,9 +40,9 @@ pub async fn read_measurement(
     for attempt in 0..MAX_READ_ATTEMPTS {
         let outcome = match (trust, creds) {
             (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
-                try_read_tls(&endpoint, b.point_index, kind, subject_name, creds).await
+                try_read_tls(&endpoint, b, kind, subject_name, creds).await
             }
-            _ => try_read_plain(&endpoint, b.point_index, kind).await,
+            _ => try_read_plain(&endpoint, b, kind).await,
         };
         match outcome {
             Ok(v) => return Ok(scaled(v, b)),
@@ -57,7 +57,7 @@ pub async fn read_measurement(
 }
 
 /// Single plain-TCP read attempt.
-async fn try_read_plain(endpoint: &str, point_index: u16, kind: PointKind) -> Result<f64> {
+async fn try_read_plain(endpoint: &str, b: &Dnp3TcpBinding, kind: PointKind) -> Result<f64> {
     let channel = spawn_master_tcp_client(
         LinkErrorMode::Close,
         MasterChannelConfig::new(EndpointAddress::try_new(MASTER_ADDR)?),
@@ -65,14 +65,14 @@ async fn try_read_plain(endpoint: &str, point_index: u16, kind: PointKind) -> Re
         ConnectStrategy::default(),
         NullListener::create(),
     );
-    read_with_channel(channel, point_index, kind).await
+    read_with_channel(channel, b, kind).await
 }
 
 /// Single DNP3/TLS read attempt. Builds `TlsClientConfig::full_pki` from the
 /// gateway's mTLS material + the device's expected subject name.
 async fn try_read_tls(
     endpoint: &str,
-    point_index: u16,
+    b: &Dnp3TcpBinding,
     kind: PointKind,
     subject_name: &str,
     creds: &GatewayCredentials,
@@ -86,7 +86,7 @@ async fn try_read_tls(
         NullListener::create(),
         tls_config,
     );
-    read_with_channel(channel, point_index, kind).await
+    read_with_channel(channel, b, kind).await
 }
 
 /// Raw point value to the measurement's unit (e.g. kV primary to volts).

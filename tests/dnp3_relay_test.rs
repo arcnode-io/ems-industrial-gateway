@@ -7,7 +7,9 @@ mod fixtures;
 use anyhow::Result;
 use ems_industrial_gateway::asyncapi::types::Dnp3TcpBinding;
 use ems_industrial_gateway::dnp3::client::read_measurement;
-use fixtures::dnp3_relay::{GROUND_FAULT, PHASE_VOLTAGE_A, PHASE_VOLTAGE_A_KV, TRIP_STATUS, spawn};
+use fixtures::dnp3_relay::{
+    GROUND_FAULT, PHASE_VOLTAGE_A, PHASE_VOLTAGE_A_KV, TRIP_STATUS, spawn, spawn_at,
+};
 use serde_json::json;
 use std::net::SocketAddr;
 
@@ -55,4 +57,23 @@ async fn an_analog_input_in_kilovolts_scales_to_volts() -> Result<()> {
         "read {volts} V"
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn an_outstation_at_its_own_address_is_read() -> Result<()> {
+    // Arrange — a real RTU commissioned at link address 10, not 1024
+    let (addr, _server) = spawn_at(10).await?;
+    let mut b = binding(addr, TRIP_STATUS, "binary_input", 1.0);
+    b.outstation_address = 10;
+    // Act
+    let trip = read_measurement(&b, None, None).await?;
+    // Assert
+    assert_eq!(trip, 1.0);
+    Ok(())
+}
+
+#[test]
+fn a_binding_without_an_address_talks_to_1024() {
+    let b = binding("127.0.0.1:20000".parse().unwrap(), 0, "analog_input", 1.0);
+    assert_eq!(b.outstation_address, 1024);
 }

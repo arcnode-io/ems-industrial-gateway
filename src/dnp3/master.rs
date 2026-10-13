@@ -1,5 +1,6 @@
 //! DNP3 master read: add an association, read one point, capture its value.
 
+use crate::asyncapi::types::Dnp3TcpBinding;
 use anyhow::{Context, Result};
 use dnp3::app::Variation;
 use dnp3::app::measurement::{AnalogInput, BinaryInput};
@@ -11,9 +12,6 @@ use dnp3::master::{
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-
-/// Outstation address used by mock-dnp3-outstation.
-const OUTSTATION_ADDR: u16 = 1024;
 
 /// Which static object group a measurement reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,20 +34,22 @@ pub fn point_kind(point_type: &str) -> Result<PointKind, String> {
     }
 }
 
-/// Add the association, enable, read `point_index` of `kind`, return it.
+/// Add the association to `b`'s outstation, enable, read its `point_index`
+/// of `kind`, return it.
 ///
 /// Reason for variation 0: it asks for the outstation's configured static
 /// variation. Forcing Group30Var1 (32-bit integer) truncated a relay's
 /// 13.8 kV to 13 kV.
 pub async fn read_with_channel(
     mut channel: MasterChannel,
-    point_index: u16,
+    b: &Dnp3TcpBinding,
     kind: PointKind,
 ) -> Result<f64> {
+    let point_index = b.point_index;
     let captured: Arc<Mutex<HashMap<u16, f64>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut association = channel
         .add_association(
-            EndpointAddress::try_new(OUTSTATION_ADDR)?,
+            EndpointAddress::try_new(b.outstation_address)?,
             association_config(),
             Box::new(Capturing {
                 kind,

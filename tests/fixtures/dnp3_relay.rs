@@ -24,15 +24,21 @@ pub const TRIP_STATUS: u16 = 9;
 /// SEL-351 BI 15: G (ground) target, clear.
 pub const GROUND_FAULT: u16 = 15;
 
-/// Spawn on an OS-assigned loopback port; drop the handle to shut down.
+/// Spawn on an OS-assigned loopback port at the usual address 1024; drop
+/// the handle to shut down.
 pub async fn spawn() -> Result<(SocketAddr, ServerHandle)> {
+    spawn_at(1024).await
+}
+
+/// `spawn`, answering as link address `outstation`.
+pub async fn spawn_at(outstation: u16) -> Result<(SocketAddr, ServerHandle)> {
     // Reason: bind-and-drop to learn a free port; the server takes a concrete addr.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
     drop(listener);
     let mut server = Server::new_tcp_server(LinkErrorMode::Close, addr);
     let outstation = server.add_outstation(
-        outstation_config(),
+        outstation_config(outstation),
         Box::new(App),
         Box::new(Info),
         Box::new(Ctl),
