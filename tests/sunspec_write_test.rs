@@ -5,10 +5,12 @@
 mod fixtures;
 
 use anyhow::Result;
-use ems_industrial_gateway::asyncapi::types::SunspecBinding;
+use ems_industrial_gateway::asyncapi::types::{ProtocolBinding, SunspecBinding};
+use ems_industrial_gateway::dispatch::write_shares;
 use ems_industrial_gateway::sunspec::write::write_setpoint;
 use fixtures::sunspec_pcs::{Pcs, at, spawn};
 use serde_json::json;
+use std::collections::HashMap;
 
 fn binding(pcs: &Pcs, point: &str) -> SunspecBinding {
     serde_json::from_value(json!({
@@ -59,5 +61,33 @@ async fn a_setpoint_that_doesnt_fit_is_refused_and_never_written() -> Result<()>
     // Assert
     assert!(result.is_err());
     assert!(pcs.writes_at(at::CMD_REAL_PWR).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_distributed_share_reaches_a_sunspec_child() -> Result<()> {
+    // Arrange — bess_module_dc's children are SunSpec PCS units
+    let pcs = spawn(40000).await?;
+    let b = binding(&pcs, "CmdRealPwr");
+    let channels = HashMap::from([(
+        "pcs_1".to_string(),
+        HashMap::from([("set_active_power".to_string(), ProtocolBinding::Sunspec(b))]),
+    )]);
+    let shares = [("pcs_1".to_string(), 100_000.0)];
+    // Act
+    write_shares(
+        &shares,
+        "set_active_power",
+        &channels,
+        &HashMap::new(),
+        None,
+    )
+    .await?;
+    // Assert — 100 kW at PWR_SF 0
+    let writes = pcs.writes_at(at::CMD_REAL_PWR);
+    assert_eq!(
+        writes.last().map(|w| w.words.clone()),
+        Some(vec![0x0001, 0x86A0])
+    );
     Ok(())
 }

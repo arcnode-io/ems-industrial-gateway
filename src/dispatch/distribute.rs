@@ -10,6 +10,7 @@ use crate::dispatch::rack_limits::{self, STALE_AFTER};
 use crate::dispatch::reserve;
 use crate::envelope;
 use crate::modbus::client as modbus;
+use crate::sunspec::write as sunspec;
 use crate::synthetic::{InputCache, as_number};
 use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
@@ -101,15 +102,15 @@ pub async fn write_shares(
             .get(device_id)
             .and_then(|chs| chs.get(channel_key))
             .ok_or_else(|| anyhow!("child {device_id} has no {channel_key} binding"))?;
-        let ProtocolBinding::ModbusTcp(b) = binding else {
-            return Err(anyhow!(
-                "child {device_id}'s {channel_key} binding is not modbus_tcp"
-            ));
-        };
         let trust = device_trust.get(device_id);
-        modbus::write_setpoint(b, *share, trust, creds)
-            .await
-            .with_context(|| format!("write to child {device_id} failed"))?;
+        let written = match binding {
+            ProtocolBinding::ModbusTcp(b) => modbus::write_setpoint(b, *share, trust, creds).await,
+            ProtocolBinding::Sunspec(b) => sunspec::write_setpoint(b, *share, trust, creds).await,
+            _ => Err(anyhow!(
+                "child {device_id}'s {channel_key} binding is not modbus_tcp or sunspec"
+            )),
+        };
+        written.with_context(|| format!("write to child {device_id} failed"))?;
     }
     Ok(())
 }

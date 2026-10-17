@@ -37,7 +37,8 @@ mod write_order;
 mod write_order_test;
 
 pub use devices::Devices;
-pub(crate) use distribute::{compute_shares, write_shares};
+pub(crate) use distribute::compute_shares;
+pub use distribute::write_shares;
 pub use topic::{CommandTopic, parse_command_topic};
 pub(crate) use write_order::{handoff_batch, reductions_first};
 
