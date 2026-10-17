@@ -39,27 +39,43 @@ pub async fn shipped_catalog(
 /// `contains` them as parent, since rollups and fleet caps resolve over a
 /// module's children; modules are pure rollups.
 pub fn one_of_each(catalog: &Map<String, Value>) -> Value {
-    let parent_of = |slug: &str| -> Option<String> {
+    let parents_of = |slug: &str| -> Vec<String> {
         catalog
             .iter()
-            .find(|(_, t)| {
+            .filter(|(_, t)| {
                 t["contains"]
                     .as_array()
                     .is_some_and(|c| c.iter().any(|e| e["template"] == slug))
             })
             .map(|(module, _)| module.clone())
+            .collect()
     };
-    let devices: Map<String, Value> = catalog
-        .iter()
+    // Reason: a leaf two modules contain (a pdu in each compute module)
+    // gets one instance per module; a module whose rollup finds no
+    // children is a DTM device-api refuses.
+    let placements: Vec<(String, &String, Option<String>)> = catalog
+        .keys()
+        .flat_map(|slug| match parents_of(slug).as_slice() {
+            [] => vec![(slug.clone(), slug, None)],
+            [first, rest @ ..] => std::iter::once((slug.clone(), slug, Some(first.clone())))
+                .chain(
+                    rest.iter()
+                        .map(|m| (format!("{slug}_{m}"), slug, Some(m.clone()))),
+                )
+                .collect(),
+        })
+        .collect();
+    let devices: Map<String, Value> = placements
+        .into_iter()
         .enumerate()
-        .map(|(i, (slug, t))| {
-            let connection = (t["kind"] == "leaf")
+        .map(|(i, (device_id, slug, parent))| {
+            let connection = (catalog[slug]["kind"] == "leaf")
                 .then(|| json!({ "host": "127.0.0.1", "port": 20000 + i, "unit_id": "1" }));
             let device = json!({
-                "device_id": slug, "template": slug,
-                "connection": connection, "parent": parent_of(slug),
+                "device_id": device_id, "template": slug,
+                "connection": connection, "parent": parent,
             });
-            (slug.clone(), device)
+            (device_id, device)
         })
         .collect();
     json!({
