@@ -10,6 +10,7 @@
 //! parse time by serde's typed deserialization.
 
 mod bindings;
+mod heartbeat;
 mod source_map;
 mod virtual_bindings;
 
@@ -17,6 +18,7 @@ pub use bindings::{
     BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding,
     SnmpBinding, SunspecBinding,
 };
+pub use heartbeat::HeartbeatSource;
 pub use virtual_bindings::{
     CapChild, ChildAllocation, DistributeBinding, PowerCapBinding, SyntheticBinding, WeightedPair,
 };
@@ -48,6 +50,14 @@ pub struct AsyncApiSpec {
         deserialize_with = "source_map::commands"
     )]
     pub x_command_source: HashMap<String, HashMap<String, CommandSource>>,
+    /// Per-device heartbeat the EMS must keep writing (see `heartbeat`).
+    /// Empty if no device needs one.
+    #[serde(
+        rename = "x-heartbeat-source",
+        default,
+        deserialize_with = "heartbeat::heartbeats"
+    )]
+    pub x_heartbeat_source: HashMap<String, HeartbeatSource>,
     /// Per-device mutual-auth trust material (pinned cert / USM creds /
     /// `none`). Keyed by device_id, parallel to `x-protocol-source`. Empty if
     /// the spec was emitted by a pre-trust device-api (default = no trust).

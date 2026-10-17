@@ -18,6 +18,7 @@ use crate::der_dispatch;
 use crate::dispatch;
 use crate::envelope;
 use crate::envelope::shed_task::{self, ShedTaskConfig};
+use crate::heartbeat;
 use crate::http::client::{fetch_asyncapi, fetch_loto};
 use crate::inputs;
 use crate::loto;
@@ -351,6 +352,29 @@ fn spawn_task_set(
             spawned_envelope += 1;
             info!(%device_id, %channel_key, guarded, "distribute rebalance task spawned");
         }
+    }
+    for (device_id, h) in &spec.x_heartbeat_source {
+        let ProtocolBinding::ModbusTcp(binding) = clone_binding(&h.binding) else {
+            unreachable!("spec parse keeps modbus_tcp heartbeats only");
+        };
+        let counter = heartbeat::Counter {
+            device_id: device_id.clone(),
+            binding,
+            modulo: h.counter_modulo,
+            period: Duration::from_secs_f64(h.period_s),
+        };
+        let trust = spec.x_device_trust.get(device_id).cloned();
+        let h = heartbeat::spawn(
+            counter,
+            client.clone(),
+            devices.locked.clone(),
+            trust,
+            cfg.gateway_credentials.clone(),
+            parent.child_token(),
+        );
+        handles.spawn(async move {
+            let _ = h.await;
+        });
     }
     for beat in sunspec_heartbeat::beats(&spec.x_command_source) {
         let trust = spec.x_device_trust.get(&beat.device_id).cloned();

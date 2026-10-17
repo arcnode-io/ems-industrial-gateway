@@ -7,6 +7,7 @@
 use crate::asyncapi::trust::DeviceTrust;
 use crate::asyncapi::types::{CommandSource, ProtocolBinding, SunspecBinding};
 use crate::config::GatewayCredentials;
+use crate::heartbeat::steerable;
 use crate::loto::LockedDevices;
 use crate::sunspec::bits::{WordKey, slot, word_key};
 use crate::sunspec::write::{read_word, write_word};
@@ -74,8 +75,7 @@ pub fn spawn(
                 _ = tick.tick() => {}
             }
             let mut word = slot.lock().await;
-            let steerable = client.is_connected() && !locked.read().await.contains(&beat.device_id);
-            if !steerable {
+            if !steerable(&client, &locked, &beat.device_id).await {
                 *word = None;
                 continue;
             }

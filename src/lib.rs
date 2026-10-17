@@ -11,6 +11,7 @@ pub mod der_dispatch;
 pub mod dispatch;
 pub mod dnp3;
 pub mod envelope;
+pub mod heartbeat;
 pub mod http;
 pub mod inputs;
 pub mod loto;
