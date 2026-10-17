@@ -24,6 +24,7 @@ use crate::loto;
 use crate::mqtt::{publisher, subscriber};
 use crate::payload;
 use crate::poller;
+use crate::sunspec::heartbeat as sunspec_heartbeat;
 use crate::synthetic::{self, Computation, InputCache, Operation, SyntheticTaskConfig};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -350,6 +351,20 @@ fn spawn_task_set(
             spawned_envelope += 1;
             info!(%device_id, %channel_key, guarded, "distribute rebalance task spawned");
         }
+    }
+    for beat in sunspec_heartbeat::beats(&spec.x_command_source) {
+        let trust = spec.x_device_trust.get(&beat.device_id).cloned();
+        let h = sunspec_heartbeat::spawn(
+            beat,
+            client.clone(),
+            devices.locked.clone(),
+            trust,
+            cfg.gateway_credentials.clone(),
+            parent.child_token(),
+        );
+        handles.spawn(async move {
+            let _ = h.await;
+        });
     }
     for mut c in ShedTaskConfig::per_poi(shed_configs) {
         c.storage = storage.clone();

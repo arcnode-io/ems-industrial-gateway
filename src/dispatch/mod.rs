@@ -46,6 +46,8 @@ use crate::asyncapi::types::ProtocolBinding;
 use crate::config::GatewayCredentials;
 use crate::modbus::client as modbus;
 use crate::redfish;
+use crate::sunspec::bits;
+use crate::sunspec::write as sunspec;
 use crate::synthetic::InputCache;
 use anyhow::{Context, Result, anyhow};
 use paho_mqtt::AsyncClient;
@@ -248,6 +250,17 @@ pub(crate) async fn execute_setpoint(
         ProtocolBinding::Redfish(b) => {
             let trust = device_trust.get(device_id);
             redfish::write::write_setpoint(b, value, trust, creds).await
+        }
+        // Reason: a bit command's verb is what it does (enable sets En,
+        // clear pulses FltClr); the topic carries it as the key's prefix.
+        ProtocolBinding::Sunspec(b) if b.bit.is_some() => {
+            let verb = channel_key.split_once('_').map_or(channel_key, |(v, _)| v);
+            let action = bits::action(verb, value)?;
+            sunspec::write_bit(b, &action, device_trust.get(device_id), creds).await
+        }
+        ProtocolBinding::Sunspec(b) => {
+            let trust = device_trust.get(device_id);
+            sunspec::write_setpoint(b, value, trust, creds).await
         }
         ProtocolBinding::PowerCap(p) => {
             power_cap::dispatch_power_cap(p, value, device_channels, device_trust, locked, creds)

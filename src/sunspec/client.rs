@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 /// Discovered model maps, per device (host, port, unit id).
-type Key = (String, u16, u8);
+pub(crate) type Key = (String, u16, u8);
 /// Shared by reads and writes; an entry goes on any failed request.
 static MODELS: LazyLock<Mutex<HashMap<Key, ModelMap>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -29,7 +29,7 @@ pub async fn read_on(channel: &mut Channel, b: &SunspecBinding) -> Result<f64> {
     // Reason: a failed read may mean the unit rebooted into firmware with
     // another layout; rediscover on the next read instead of trusting it.
     if read.is_err() {
-        MODELS.lock().unwrap().remove(&key);
+        forget(&key);
     }
     read.with_context(|| format!("sunspec {} {}", b.model_id, b.point))
 }
@@ -42,6 +42,11 @@ pub(crate) async fn models(channel: &mut Channel, key: &Key) -> Result<ModelMap>
     let models = discover(channel, key.2).await?;
     MODELS.lock().unwrap().insert(key.clone(), models.clone());
     Ok(models)
+}
+
+/// Drop `key`'s model map, so its next request rediscovers.
+pub(crate) fn forget(key: &Key) {
+    MODELS.lock().unwrap().remove(key);
 }
 
 /// `read_on` without the cache eviction.

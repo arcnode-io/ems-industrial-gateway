@@ -17,6 +17,8 @@ pub mod gateway;
 #[allow(dead_code)]
 pub mod modbus_security;
 #[allow(dead_code)]
+pub mod pcs_operator;
+#[allow(dead_code)]
 pub mod pki;
 #[allow(dead_code)]
 pub mod readiness;
