@@ -153,3 +153,24 @@ pub struct Dnp3TcpBinding {
     #[serde(default = "default_outstation_address")]
     pub outstation_address: u16,
 }
+
+/// SunSpec over Modbus TCP: a point named by SunSpec model and point id,
+/// not by register. The gateway finds the model's address at connect (see
+/// `sunspec::discover`), so a firmware that reorders models still reads right.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SunspecBinding {
+    /// Target host (IP or DNS) for the Modbus TCP connection.
+    pub host: String,
+    /// TCP port (502 by convention).
+    pub port: u16,
+    /// Modbus unit id, a string in the DTM like Modbus TCP's.
+    pub unit_id: String,
+    /// SunSpec model id, e.g. 103 (three-phase inverter), 65534 (EPC control).
+    pub model_id: u16,
+    /// Point id within the model, e.g. `W`, `CmdBits`.
+    pub point: String,
+    /// One bit of a bitfield point; absent reads or writes the whole value.
+    #[serde(default)]
+    pub bit: Option<u8>,
+}

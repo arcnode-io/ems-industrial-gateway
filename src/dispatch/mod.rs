@@ -283,6 +283,7 @@ fn protocol_name(binding: &ProtocolBinding) -> &'static str {
         ProtocolBinding::Dnp3Tcp(_) => "dnp3_tcp",
         ProtocolBinding::BacnetIp(_) => "bacnet_ip",
         ProtocolBinding::BacnetSc(_) => "bacnet_sc",
+        ProtocolBinding::Sunspec(_) => "sunspec",
         ProtocolBinding::Synthetic(_) => "synthetic",
         ProtocolBinding::Distribute(_) => "distribute",
         ProtocolBinding::PowerCap(_) => "power_cap",

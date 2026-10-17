@@ -37,7 +37,7 @@ pub async fn read_measurement(
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<f64> {
-    read_on(&mut channel(b, trust, creds)?, b).await
+    read_on(&mut channel(&b.host, b.port, trust, creds)?, b).await
 }
 
 /// `read_measurement` over an open session, so a device's readings can
@@ -70,7 +70,7 @@ pub async fn write_setpoint(
     let function = write_function(b.function_code, b.data_type).map_err(anyhow::Error::msg)?;
     let words = encode_raw(to_raw(value, b.scale, b.offset), b.data_type, b.word_order)
         .map_err(anyhow::Error::msg)?;
-    let channel = write_channel(b, trust, creds)?;
+    let channel = write_channel(&b.host, b.port, trust, creds)?;
     write_registers(channel, unit_id(b)?, b.address, &words, function).await
 }
 
@@ -80,8 +80,9 @@ pub async fn write_setpoint(
 /// so every write failed, backed off 500 ms and landed late. The envelope
 /// writes each rack every tick; late writes skewed what the battery
 /// delivered.
-fn write_channel(
-    b: &ModbusTcpBinding,
+pub(crate) fn write_channel(
+    host: &str,
+    port: u16,
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<Channel> {
@@ -92,11 +93,11 @@ fn write_channel(
         (trust, creds),
         (Some(DeviceTrust::TlsMutual { .. }), Some(_))
     );
-    let key = (b.host.clone(), b.port, secure);
+    let key = (host.to_string(), port, secure);
     if let Some(ch) = SESSIONS.lock().unwrap().get(&key) {
         return Ok(ch.clone());
     }
-    let ch = channel(b, trust, creds)?;
+    let ch = channel(host, port, trust, creds)?;
     Ok(SESSIONS.lock().unwrap().entry(key).or_insert(ch).clone())
 }
 
@@ -130,18 +131,19 @@ pub async fn write_holding(
     .await
 }
 
-/// A session to `b`'s host: Modbus Security when the device requires mTLS
+/// A session to `host:port`: Modbus Security when the device requires mTLS
 /// and the gateway has creds, plain TCP otherwise.
 pub fn channel(
-    b: &ModbusTcpBinding,
+    host: &str,
+    port: u16,
     trust: Option<&DeviceTrust>,
     creds: Option<&GatewayCredentials>,
 ) -> Result<Channel> {
     match (trust, creds) {
         (Some(DeviceTrust::TlsMutual { subject_name }), Some(creds)) => {
-            tls_channel(&b.host, b.port, subject_name, creds)
+            tls_channel(host, port, subject_name, creds)
         }
-        _ => Ok(tcp_channel(&b.host, b.port)),
+        _ => Ok(tcp_channel(host, port)),
     }
 }
 

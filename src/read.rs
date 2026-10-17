@@ -10,6 +10,7 @@ use crate::modbus::client as modbus;
 use crate::payload::Raw;
 use crate::redfish::client as redfish;
 use crate::snmp::client as snmp;
+use crate::sunspec::client as sunspec;
 use anyhow::Result;
 
 /// Single-point protocol dispatch. Add a `match` arm when a new
@@ -36,6 +37,10 @@ pub async fn read_value(
         ProtocolBinding::BacnetSc(b) => bacnet_sc::read_measurement(b, trust, creds)
             .await
             .map(Raw::Number),
+        ProtocolBinding::Sunspec(b) => {
+            let mut session = modbus::channel(&b.host, b.port, trust, creds)?;
+            sunspec::read_on(&mut session, b).await.map(Raw::Number)
+        }
         // Synthetic channels are driven by `src/synthetic/`; the poller is
         // never handed one. Unreachable is a tripwire for that routing.
         ProtocolBinding::Synthetic(_) => {

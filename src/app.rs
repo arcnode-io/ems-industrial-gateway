@@ -504,9 +504,17 @@ fn clamp_poll_rate(value: Option<f64>, topic: &str) -> f64 {
 fn clone_binding(b: &ProtocolBinding) -> ProtocolBinding {
     use crate::asyncapi::types::{
         BacnetIpBinding, BacnetScBinding, DistributeBinding, Dnp3TcpBinding, ModbusTcpBinding,
-        RedfishBinding, SnmpBinding, SyntheticBinding,
+        RedfishBinding, SnmpBinding, SunspecBinding, SyntheticBinding,
     };
     match b {
+        ProtocolBinding::Sunspec(s) => ProtocolBinding::Sunspec(SunspecBinding {
+            host: s.host.clone(),
+            port: s.port,
+            unit_id: s.unit_id.clone(),
+            model_id: s.model_id,
+            point: s.point.clone(),
+            bit: s.bit,
+        }),
         ProtocolBinding::ModbusTcp(m) => ProtocolBinding::ModbusTcp(ModbusTcpBinding {
             host: m.host.clone(),
             port: m.port,

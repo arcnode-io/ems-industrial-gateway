@@ -21,4 +21,5 @@ pub mod poller;
 pub mod read;
 pub mod redfish;
 pub mod snmp;
+pub mod sunspec;
 pub mod synthetic;

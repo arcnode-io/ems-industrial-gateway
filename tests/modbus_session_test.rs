@@ -105,7 +105,7 @@ async fn a_modbus_exception_fails_at_once() -> Result<()> {
             "address": address, "data_type": "uint16", "scale": 1.0, "offset": 0.0,
         }))?)
     };
-    let mut session = channel(&binding(0)?, None, None)?;
+    let mut session = channel("127.0.0.1", meter.port(), None, None)?;
     read_on(&mut session, &binding(0)?).await?;
     // Act — an address the meter doesn't have
     let started = Instant::now();

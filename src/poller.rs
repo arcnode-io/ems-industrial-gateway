@@ -12,13 +12,14 @@
 //! handful of sessions and refuses the rest.
 
 use crate::asyncapi::trust::DeviceTrust;
-use crate::asyncapi::types::ProtocolBinding;
+use crate::asyncapi::types::{ModbusTcpBinding, ProtocolBinding, SunspecBinding};
 use crate::config::GatewayCredentials;
 use crate::modbus::client as modbus;
 use crate::mqtt::publisher;
 use crate::payload::{Payload, Raw};
 use crate::read::read_value;
 use crate::redfish::client as redfish;
+use crate::sunspec::client as sunspec;
 use anyhow::{Result, bail};
 use chrono::Utc;
 use rodbus::client::Channel;
@@ -108,10 +109,11 @@ async fn poll_due(
                     Err(e) => Err(anyhow::anyhow!("{e}")),
                 }
             }
-            ProtocolBinding::ModbusTcp(b) => {
-                let key = format!("{}:{}", b.host, b.port);
+            ProtocolBinding::ModbusTcp(ModbusTcpBinding { host, port, .. })
+            | ProtocolBinding::Sunspec(SunspecBinding { host, port, .. }) => {
+                let key = format!("{host}:{port}");
                 if !sessions.contains_key(&key) {
-                    match modbus::channel(b, trust, creds) {
+                    match modbus::channel(host, *port, trust, creds) {
                         Ok(channel) => {
                             sessions.insert(key.clone(), channel);
                         }
@@ -122,9 +124,13 @@ async fn poll_due(
                         }
                     }
                 }
-                modbus::read_on(sessions.get_mut(&key).expect("just inserted"), b)
-                    .await
-                    .map(Raw::Number)
+                let session = sessions.get_mut(&key).expect("just inserted");
+                match &p.binding {
+                    ProtocolBinding::Sunspec(b) => sunspec::read_on(session, b).await,
+                    ProtocolBinding::ModbusTcp(b) => modbus::read_on(session, b).await,
+                    _ => unreachable!("matched above"),
+                }
+                .map(Raw::Number)
             }
             other => read_value(other, trust, creds).await,
         };
@@ -172,32 +178,5 @@ fn advance(due_at: Instant, period: Duration, now: Instant) -> Instant {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_readings_whose_time_has_come_are_due() {
-        let t0 = Instant::now();
-        let next = [t0, t0 + Duration::from_secs(1), t0];
-        assert_eq!(due(&next, t0), vec![0, 2]);
-    }
-
-    #[test]
-    fn a_reading_on_schedule_is_next_due_one_period_later() {
-        let t0 = Instant::now();
-        let next = advance(t0, Duration::from_secs(2), t0 + Duration::from_millis(100));
-        assert_eq!(next, t0 + Duration::from_secs(2));
-    }
-
-    #[test]
-    fn a_late_reading_waits_a_full_period_instead_of_catching_up() {
-        // Arrange — a slow device made this read 5 s late on a 1 s period
-        let t0 = Instant::now();
-        let now = t0 + Duration::from_secs(5);
-        // Act + Assert
-        assert_eq!(
-            advance(t0, Duration::from_secs(1), now),
-            now + Duration::from_secs(1)
-        );
-    }
-}
+#[path = "poller_test.rs"]
+mod tests;

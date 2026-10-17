@@ -10,6 +10,8 @@
 //!   a SunSpec scale factor, which only reads apply. A bad template on one
 //!   device mustn't take every other device offline.
 //! - Unread DNP3 point type: measurements read analog or binary inputs only.
+//! - A SunSpec point the gateway doesn't ship a model for, or a command on
+//!   a read-only point or a whole bitfield.
 //! - A power cap with part of an envelope guard: shedding was enabled but
 //!   can't run.
 //!
@@ -18,6 +20,7 @@
 use super::{CommandSource, PowerCapBinding, ProtocolBinding, ProtocolSource};
 use crate::dnp3::master::point_kind;
 use crate::modbus::function_code::{read_function, write_function};
+use crate::sunspec::resolve as sunspec;
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use serde_json::Value;
@@ -37,6 +40,7 @@ pub fn measurements<'de, D: Deserializer<'de>>(
     parse(d, |s: &ProtocolSource| match &s.binding {
         ProtocolBinding::ModbusTcp(m) => read_function(m.function_code).map(drop),
         ProtocolBinding::Dnp3Tcp(d) => point_kind(&d.point_type).map(drop),
+        ProtocolBinding::Sunspec(b) => sunspec::readable(b).map(drop),
         _ => Ok(()),
     })
 }
@@ -48,6 +52,7 @@ pub fn commands<'de, D: Deserializer<'de>>(d: D) -> Result<SourceMap<CommandSour
             Err("scale_factor_address (SunSpec sunssf) is only applied on reads".to_string())
         }
         ProtocolBinding::ModbusTcp(m) => write_function(m.function_code, m.data_type).map(drop),
+        ProtocolBinding::Sunspec(b) => sunspec::writable(b).map(drop),
         ProtocolBinding::PowerCap(p) => whole_guard(p),
         _ => Ok(()),
     })

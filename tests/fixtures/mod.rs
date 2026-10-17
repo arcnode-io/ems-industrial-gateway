@@ -26,3 +26,5 @@ pub mod real_dtm;
 pub mod redfish_security;
 #[allow(dead_code)]
 pub mod spec_stub;
+#[allow(dead_code)]
+pub mod sunspec_pcs;

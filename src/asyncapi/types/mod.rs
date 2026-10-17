@@ -14,7 +14,8 @@ mod source_map;
 mod virtual_bindings;
 
 pub use bindings::{
-    BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding, SnmpBinding,
+    BacnetIpBinding, BacnetScBinding, Dnp3TcpBinding, ModbusTcpBinding, RedfishBinding,
+    SnmpBinding, SunspecBinding,
 };
 pub use virtual_bindings::{
     CapChild, ChildAllocation, DistributeBinding, PowerCapBinding, SyntheticBinding, WeightedPair,
@@ -140,6 +141,9 @@ pub enum ProtocolBinding {
     /// hub, hub forwards to the destination device by VMAC.
     #[serde(rename = "bacnet_sc")]
     BacnetSc(BacnetScBinding),
+    /// SunSpec over Modbus TCP, resolved by model + point at connect.
+    #[serde(rename = "sunspec")]
+    Sunspec(SunspecBinding),
     /// Synthetic: gateway-computed pure function of cached MQTT inputs.
     /// No south-side protocol; produces an MQTT publish from upstream MQTT
     /// subscriptions. See `src/synthetic/`.
@@ -158,6 +162,10 @@ pub enum ProtocolBinding {
 #[cfg(test)]
 #[path = "source_map_test.rs"]
 mod source_map_test;
+
+#[cfg(test)]
+#[path = "sunspec_test.rs"]
+mod sunspec_test;
 
 #[cfg(test)]
 #[path = "unknown_fields_test.rs"]
