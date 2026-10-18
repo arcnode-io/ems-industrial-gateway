@@ -30,6 +30,7 @@ mod distribute;
 mod operating_state;
 pub(crate) mod power_cap;
 pub(crate) mod rack_limits;
+mod requested;
 mod reserve;
 mod topic;
 mod write_order;
@@ -60,10 +61,10 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 /// Per-device, per-`{verb}_{target}` last real operator/dispatcher setpoint
-/// request — recorded in `handle_command` once its write lands, before any
+/// request — recorded in `handle_command` as its write starts, before any
 /// envelope clamp, so the envelope loop always has a real value to ramp back
-/// toward. A command acked `failed` leaves it as it was: the loops that steer
-/// toward it must never apply a setpoint the operator saw refused. The envelope loop's own writes go through `execute_setpoint`
+/// toward. A command acked `failed` puts the previous request back: the loops
+/// that steer toward it must never apply a setpoint the operator saw refused. The envelope loop's own writes go through `execute_setpoint`
 /// directly, never through `handle_command`, so they can never overwrite
 /// this — see `envelope` module docs.
 pub type LastRequestedSetpoints = Arc<RwLock<HashMap<String, HashMap<String, f64>>>>;
@@ -121,8 +122,8 @@ pub fn event_payload(
 /// to); commands for a device with no binding here are another service's and
 /// are ignored. `Phase::Done` means the write to the south-side device
 /// succeeded; `Phase::Failed` covers unknown command, unsupported protocol,
-/// write errors and a locked-out device alike; only a command whose write
-/// lands is recorded as the device's requested setpoint.
+/// write errors and a locked-out device alike; a command acked `failed`
+/// leaves the device's requested setpoint as it was.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_command(
     client: &AsyncClient,
@@ -185,6 +186,9 @@ pub async fn handle_command(
         .await;
     };
 
+    // Real operator/dispatcher request. See `LastRequestedSetpoints` docs
+    // for why this must be the only writer.
+    let previous = requested::record(last_requested, device_id, &channel_key, frame.value).await;
     match execute_setpoint(
         binding,
         frame.value,
@@ -200,18 +204,12 @@ pub async fn handle_command(
     .await
     {
         Ok(()) => {
-            // Real operator/dispatcher request, recorded once it lands. See
-            // `LastRequestedSetpoints` docs for why this must be the only writer.
-            last_requested
-                .write()
-                .await
-                .entry(device_id.to_string())
-                .or_default()
-                .insert(channel_key.clone(), frame.value);
             info!(%device_id, command_id = %frame.command_id, value = frame.value, "dispatch command applied");
             publish_event(client, &events, &frame.command_id, Phase::Done, None).await
         }
         Err(err) => {
+            let value = frame.value;
+            requested::restore(last_requested, device_id, &channel_key, value, previous).await;
             warn!(%device_id, command_id = %frame.command_id, error = %err, "dispatch write failed");
             publish_event(
                 client,
